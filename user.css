@@ -420,8 +420,9 @@ html:not(.tty-compact) {
     position: relative;
     display: grid !important;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-rows: 1fr auto 1fr;
-    grid-template-areas: "cover . action" "cover info action" "cover meta action";
+    grid-template-rows: auto 1fr auto auto 1fr;
+    grid-template-areas: "title title title" "cover . action" "cover artists action" "cover meta action" "cover . action";
+    row-gap: 8px;
     container-type: inline-size;
     align-items: center;
     column-gap: 16px;
@@ -459,8 +460,36 @@ html:not(.tty-compact) {
     margin-top: 8px;
   }
 
+  /* The song name gets its own line across the top of the pane, so it isn't
+     squeezed beside the cover. Its box steps aside so the name and the
+     artist can sit in different rows. */
   :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2)) {
-    grid-area: info;
+    display: contents !important;
+  }
+
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) {
+    grid-area: title;
+    min-width: 0;
+    margin: 8px 0 0 4px;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  /* Spotify scrolls long names in one line with a fade; wrap them instead. */
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
+    display: inline !important;
+    white-space: normal !important;
+    mask-image: none !important;
+    -webkit-mask-image: none !important;
+    transform: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)) {
+    grid-area: artists;
     min-width: 0;
   }
 
@@ -474,15 +503,32 @@ html:not(.tty-compact) {
   [data-testid="cover-art-button"],
   :is([data-testid=cover-art-button]),
   :is([data-testid=cover-art-button]) img {
-    /* Shrinks on narrow windows so the song name keeps room. */
-    width: min(180px, 36cqw) !important;
-    height: min(180px, 36cqw) !important;
+    /* Leaves room for two lines of song name above it. */
+    width: min(118px, 36cqw) !important;
+    height: min(118px, 36cqw) !important;
+  }
+
+  /* Spotify's image box inside the cover button is shorter than the button
+     and sits lower, which showed a grey strip above the art. Fill the button. */
+  [data-testid=cover-art-button] {
+    background: transparent !important;
+  }
+
+  [data-testid=cover-art-button] > div,
+  [data-testid=cover-art-button] > div > div {
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  [data-testid=cover-art-button] img {
+    inset: 0 !important;
+    object-fit: cover;
   }
 
   :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child),
   :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
-    font-size: 21px !important;
-    line-height: 28px !important;
+    font-size: 19px !important;
+    line-height: 24px !important;
   }
 
   :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)),
@@ -496,7 +542,7 @@ html:not(.tty-compact) {
     :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child),
     :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
       font-size: 16px !important;
-      line-height: 22px !important;
+      line-height: 21px !important;
     }
 
     :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)),
