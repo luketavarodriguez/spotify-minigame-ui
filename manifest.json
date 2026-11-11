@@ -5,7 +5,7 @@
   "readme": "README.md",
   "usercss": "user.css",
   "schemes": "color.ini",
-  "include": ["https://raw.githubusercontent.com/lukerodriguez8/spotify-minigame-ui/main/theme.js"],
-  "authors": [{ "name": "lukerodriguez8", "url": "https://github.com/lukerodriguez8" }],
+  "include": ["https://raw.githubusercontent.com/luketavarodriguez/spotify-minigame-ui/main/theme.js"],
+  "authors": [{ "name": "luketavarodriguez", "url": "https://github.com/lukerodriguez8" }],
   "tags": ["games", "terminal", "lyrics", "beat sync"]
 }

@@ -34,7 +34,7 @@ Install the Spotify Minigame UI theme on my computer:
    - macOS or Linux: curl -fsSL https://raw.githubusercontent.com/spicetify/cli/main/install.sh | sh
    - Windows (PowerShell): iwr -useb https://raw.githubusercontent.com/spicetify/cli/main/install.ps1 | iex
    If Spotify on Windows came from the Microsoft Store, stop and tell me to reinstall it from spotify.com first.
-2. Clone https://github.com/lukerodriguez8/spotify-minigame-ui into the Spicetify Themes folder as "spotify-minigame-ui"
+2. Clone https://github.com/luketavarodriguez/spotify-minigame-ui into the Spicetify Themes folder as "spotify-minigame-ui"
    (~/.config/spicetify/Themes on macOS and Linux, %APPDATA%\spicetify\Themes on Windows).
 3. Run: spicetify config current_theme spotify-minigame-ui color_scheme tty inject_theme_js 1 inject_css 1 replace_colors 1
 4. Run: spicetify backup apply (or spicetify apply if a backup already exists).
@@ -49,7 +49,7 @@ Install the Spotify Minigame UI theme on my computer:
    - Windows: `%APPDATA%\spicetify\Themes`
 
    ```bash
-   git clone https://github.com/lukerodriguez8/spotify-minigame-ui ~/.config/spicetify/Themes/spotify-minigame-ui
+   git clone https://github.com/luketavarodriguez/spotify-minigame-ui ~/.config/spicetify/Themes/spotify-minigame-ui
    ```
 
 3. Turn it on:
