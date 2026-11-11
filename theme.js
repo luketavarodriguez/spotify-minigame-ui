@@ -8,7 +8,7 @@
 (function terminal() {
   const S = window.Spicetify;
   const player = S?.Platform?.PlayerAPI;
-  if (!player?._state || !S.Platform.History || !document.querySelector(".Root__top-container")) {
+  if (!player?._state || !S.Platform.History || !document.querySelector(":is(div:has(> #main-view))")) {
     setTimeout(terminal, 300);
     return;
   }
@@ -57,10 +57,13 @@
   const renderPrompt = () => {
     promptUser.textContent = `${userName}@spotify`;
     promptPath.textContent = cwd();
-    // Sit right of the back/forward buttons; hide if the search box gets close.
-    const history = document.querySelector(".main-globalNav-historyButtonsContainer")?.getBoundingClientRect();
-    const search = document.querySelector(".main-globalNav-searchContainer")?.getBoundingClientRect();
-    const left = (history?.right ?? 210) + 16;
+    // Sit right of the last button before the search box (back/forward, and
+    // whatever Spotify adds beside them); hide if the search box gets close.
+    const search = document.querySelector(":is(#global-nav-bar form[role=search])")?.getBoundingClientRect();
+    const before = [...document.querySelectorAll("#global-nav-bar :is(button, a)")]
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width && (!search || r.right < search.left - 40));
+    const left = Math.max(210, ...before.map((r) => r.right)) + 16;
     prompt.style.left = `${left}px`;
     prompt.style.visibility = search && left + prompt.offsetWidth + 16 > search.left ? "hidden" : "visible";
   };
@@ -245,14 +248,14 @@
   // Colors come from the current look, and the background from the pane
   // itself, so sprite outlines match whatever Spotify paints behind them.
   const paneBackground = () => {
-    for (let node = document.querySelector(".main-nowPlayingBar-container"); node; node = node.parentElement) {
+    for (let node = document.querySelector(":is([data-testid=now-playing-bar])"); node; node = node.parentElement) {
       const [r, g, b, a = 1] = (getComputedStyle(node).backgroundColor.match(/[\d.]+/g) ?? []).map(Number);
       if (a > 0.5) return [r, g, b];
     }
     return null;
   };
   const buildSprites = () => {
-      const css = getComputedStyle(document.querySelector(".Root__now-playing-bar") ?? root);
+      const css = getComputedStyle(document.querySelector(":is(div:has(> [data-testid=now-playing-bar]))") ?? root);
       const rgb = (name, fallback) => (css.getPropertyValue(name).trim() || fallback).split(",").map(Number);
       const text = rgb("--spice-rgb-text", "212,212,212");
       const accent = rgb("--spice-rgb-button", "95,215,95");
@@ -1259,7 +1262,7 @@
   };
 
   const placeQueue = () => {
-    const right = document.querySelector(".main-nowPlayingBar-right");
+    const right = document.querySelector(":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]))");
     if (right && queueBox.parentElement !== right) right.prepend(queueBox);
   };
 
@@ -1748,8 +1751,8 @@
 
   const frame = (now) => {
     requestAnimationFrame(frame);
-    const pane = document.querySelector(".main-nowPlayingBar-container");
-    const bar = document.querySelector(".playback-bar .playback-progressbar-container");
+    const pane = document.querySelector(":is([data-testid=now-playing-bar])");
+    const bar = document.querySelector(":is(div:has(> [data-testid=playback-position])) :is([data-testid=playback-progressbar])");
     if (!pane || !bar || !sheets || !birdSprites || !shooterSprites || !ctx) return;
     if (game.view === "compact") return;
     if (canvas.parentElement !== pane) pane.prepend(canvas);
@@ -2110,7 +2113,7 @@
 
   const SPOTIFY_BUTTONS = [
     ["queue", "queue", "q", "Queue", '[data-testid="control-button-queue"]'],
-    ["devices", "devices", "dev", "Connect to a device", ".main-nowPlayingBar-extraControls button:not([data-testid])"],
+    ["devices", "devices", "dev", "Connect to a device", ":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) button:not([data-testid])"],
     ["mini", "mini", "mini", "Miniplayer", '[data-testid="pip-toggle-button"]'],
     ["full", "full", "full", "Full screen", '[data-testid="fullscreen-mode-button"]'],
   ];
@@ -2203,7 +2206,7 @@
   settingsBar.append(lookSwitch.wrap, viewSwitch.wrap, showSwitch.wrap, volumeWrap);
 
   const placeSwitches = () => {
-    const pane = document.querySelector(".main-nowPlayingBar-container");
+    const pane = document.querySelector(":is([data-testid=now-playing-bar])");
     if (!pane) return;
     for (const bar of [settingsBar, gamesBar, lyricBar]) if (bar.parentElement !== pane) pane.append(bar);
     // Room between the pane title and the right edge, less a gap between bars.
@@ -2225,7 +2228,7 @@
     // Both side panes get one width: the narrower side's, less a gap from
     // the song controls, at most 560px. Spotify's two side columns differ by
     // a few pixels, and matching panes is the point.
-    const sides = [".main-nowPlayingBar-left", ".main-nowPlayingBar-right"].map((q) => document.querySelector(q));
+    const sides = [":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2])))", ":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]))"].map((q) => document.querySelector(q));
     if (sides.every(Boolean)) {
       const inner = (node) => {
         const cs = getComputedStyle(node);

@@ -76,7 +76,7 @@ html:not(.tty-spotify) {
 
   /* Spotify's own components in the bar read these, so point them at the
      terminal palette. */
-  .Root__now-playing-bar {
+  :is(div:has(> [data-testid=now-playing-bar])) {
     --background-base: var(--spice-main);
     --background-highlight: var(--spice-main-elevated);
     --background-elevated-base: var(--spice-main-elevated);
@@ -90,18 +90,18 @@ html:not(.tty-spotify) {
     background: var(--spice-main);
   }
 
-  .Root__now-playing-bar,
-  .Root__now-playing-bar * {
+  :is(div:has(> [data-testid=now-playing-bar])),
+  :is(div:has(> [data-testid=now-playing-bar])) * {
     font-family: var(--tty-font) !important;
     border-radius: 0 !important;
   }
 
-  .main-nowPlayingBar-container {
+  :is([data-testid=now-playing-bar]) {
     background: var(--spice-main) !important;
   }
 
   /* A tmux-style pane: a border with its title on the top edge. */
-  .main-nowPlayingBar-container::after {
+  :is([data-testid=now-playing-bar])::after {
     content: "";
     position: absolute;
     inset: 7px 0 0;
@@ -110,7 +110,7 @@ html:not(.tty-spotify) {
     box-shadow: inset 0 0 0 1px var(--tty-line);
   }
 
-  .main-nowPlayingBar-container::before {
+  :is([data-testid=now-playing-bar])::before {
     content: "paused";
     position: absolute;
     top: 0;
@@ -124,48 +124,48 @@ html:not(.tty-spotify) {
     pointer-events: none;
   }
 
-  &.tty-playing .main-nowPlayingBar-container::before {
+  &.tty-playing :is([data-testid=now-playing-bar])::before {
     /* A plain label: an animated one relaid out the whole app on every tick. */
     content: "playing";
   }
 
-  .main-trackInfo-name,
-  .main-trackInfo-name * {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child),
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
     color: var(--spice-text) !important;
   }
 
-  .main-trackInfo-artists,
-  .main-trackInfo-artists * {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)),
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)) * {
     color: var(--spice-subtext) !important;
   }
 
-  .main-nowPlayingBar-nowPlayingBar :is([data-testid="playback-position"], [data-testid="playback-duration"]) {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls])) :is([data-testid="playback-position"], [data-testid="playback-duration"]) {
     color: var(--spice-subtext) !important;
   }
 
-  .player-controls [data-testid="control-button-playpause"] > span {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"] > span {
     background: transparent !important;
     color: var(--spice-text) !important;
     box-shadow: inset 0 0 0 1px var(--tty-line);
   }
 
-  .player-controls [data-testid="control-button-playpause"]:hover > span {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"]:hover > span {
     background: var(--spice-button) !important;
     color: var(--spice-main) !important;
   }
 
-  .player-controls [data-testid="control-button-playpause"] svg {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"] svg {
     fill: currentColor !important;
   }
 
-  .progress-bar {
+  :is([data-testid=progress-bar]) {
     --fg-color: var(--spice-text) !important;
     --bg-color: var(--tty-rule) !important;
     --is-active-fg-color: var(--spice-button) !important;
   }
 }
 
-.main-nowPlayingBar-container {
+:is([data-testid=now-playing-bar]) {
   position: relative;
 }
 
@@ -179,7 +179,7 @@ html:not(.tty-spotify) {
   pointer-events: none;
 }
 
-.main-nowPlayingBar-nowPlayingBar {
+:is([data-testid=now-playing-bar] > div:has([data-testid=player-controls])) {
   position: relative;
   z-index: 1;
 }
@@ -315,32 +315,32 @@ html.tty-compact :is(.tty-switchbar--games, .tty-mode--spotify) {
    with the track info and volume. --------------------------------------- */
 
 html:not(.tty-compact) {
-  .main-nowPlayingBar-container,
-  .main-nowPlayingBar-nowPlayingBar {
+  :is([data-testid=now-playing-bar]),
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls])) {
     height: 276px !important;
   }
 
   /* The two side panes sit centered in the space between the switches on
      the top border (16px down) and the bottom of the pane. */
-  .main-nowPlayingBar-left,
-  .main-nowPlayingBar-right {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]))),
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button])) {
     align-self: center;
     margin-top: 16px;
   }
 
   /* Keep the last label off the pane's right border. */
-  .main-nowPlayingBar-right {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button])) {
     padding-right: 16px;
   }
 
-  .main-nowPlayingBar-center {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=player-controls])) {
     align-self: stretch;
   }
 
   /* The song controls flank the timeline: shuffle and back on its left, skip
      and repeat on its right, all on one row near the bottom so the games get
      the sky above. Play/pause floats over the middle of the timeline. */
-  .player-controls {
+  :is([data-testid=player-controls]) {
     display: grid !important;
     grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-rows: 1fr auto;
@@ -351,26 +351,26 @@ html:not(.tty-compact) {
     padding-bottom: 22px;
   }
 
-  .player-controls__buttons {
+  :is([data-testid=general-controls]) {
     display: contents !important;
   }
 
-  .player-controls__left {
+  :is([data-testid=general-controls] > div:first-child) {
     grid-area: left;
     gap: 10px;
   }
 
-  .player-controls__right {
+  :is([data-testid=general-controls] > div:last-child) {
     grid-area: right;
     gap: 10px;
   }
 
-  .playback-bar {
+  :is(div:has(> [data-testid=playback-position])) {
     grid-area: bar;
     width: 100% !important;
   }
 
-  .player-controls__buttons [data-testid="control-button-playpause"] {
+  :is([data-testid=general-controls]) [data-testid="control-button-playpause"] {
     grid-area: bar;
     justify-self: center;
     align-self: center;
@@ -382,45 +382,46 @@ html:not(.tty-compact) {
   }
 
   /* Shown while paused, or while you point at the timeline or the button. */
-  &:not(.tty-playing) .player-controls__buttons [data-testid="control-button-playpause"],
-  .player-controls:has(.playback-bar:hover, [data-testid="control-button-playpause"]:hover) [data-testid="control-button-playpause"] {
+  &:not(.tty-playing) :is([data-testid=general-controls]) [data-testid="control-button-playpause"],
+  :is([data-testid=player-controls]):has(:is(div:has(> [data-testid=playback-position])):hover, [data-testid="control-button-playpause"]:hover) [data-testid="control-button-playpause"] {
     opacity: 1;
     pointer-events: auto;
   }
 
-  .player-controls [data-testid="control-button-playpause"] > span {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"] > span {
     width: 52px !important;
     height: 52px !important;
     background: var(--spice-main) !important;
   }
 
-  .player-controls [data-testid="control-button-playpause"] svg {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"] svg {
     width: 22px !important;
     height: 22px !important;
   }
 
   /* theme.js draws the playback bar as the game's ground. The real bar stays
      on top, invisible, so clicking and dragging to seek still work. */
-  .playback-bar .playback-progressbar-container {
+  :is(div:has(> [data-testid=playback-position])) :is([data-testid=playback-progressbar]) {
     position: relative;
   }
 
-  .playback-bar .x-progressBar-progressBarBg,
-  .playback-bar .progress-bar__slider {
+  :is(div:has(> [data-testid=playback-position])) :is([data-testid=progress-bar-background]),
+  :is(div:has(> [data-testid=playback-position])) :is([data-testid=progress-bar-handle]) {
     opacity: 0;
   }
 
   /* Left: a pane the same size as the up-next one, with the cover on its
      left and the song name, artist and add button beside it. */
-  .main-nowPlayingBar-left {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]))) {
     display: flex;
   }
 
-  .main-nowPlayingWidget-nowPlaying {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2])) {
     position: relative;
     display: grid !important;
     grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas: "cover info action";
+    grid-template-rows: 1fr auto 1fr;
+    grid-template-areas: "cover . action" "cover info action" "cover meta action";
     container-type: inline-size;
     align-items: center;
     column-gap: 16px;
@@ -433,7 +434,7 @@ html:not(.tty-compact) {
     box-shadow: inset 0 0 0 1px var(--tty-line);
   }
 
-  .main-nowPlayingWidget-nowPlaying::before {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]))::before {
     content: "now playing";
     position: absolute;
     top: -1px;
@@ -446,52 +447,60 @@ html:not(.tty-compact) {
     line-height: 12px;
   }
 
-  .main-coverSlotCollapsed-container {
+  :is([data-testid=cover-art-container]) {
     grid-area: cover;
   }
 
-  .main-nowPlayingWidget-trackInfo {
+  /* Spotify 1.3.8's BPM and key tag, under the song name. */
+  [data-testid=bpm-key-metadata] {
+    grid-area: meta;
+    align-self: start;
+    justify-self: start;
+    margin-top: 8px;
+  }
+
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2)) {
     grid-area: info;
     min-width: 0;
   }
 
-  .main-nowPlayingWidget-actionButtonWrapper {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:last-child) {
     grid-area: action;
   }
 
-  .main-coverSlotCollapsed-container,
-  .main-coverSlotCollapsed-container > div,
+  :is([data-testid=cover-art-container]),
+  :is([data-testid=cover-art-container]) > div,
   [data-testid="cover-drop-target"],
   [data-testid="cover-art-button"],
-  .main-nowPlayingWidget-coverArt,
-  .main-nowPlayingWidget-coverArt img {
+  :is([data-testid=cover-art-button]),
+  :is([data-testid=cover-art-button]) img {
     /* Shrinks on narrow windows so the song name keeps room. */
     width: min(180px, 36cqw) !important;
     height: min(180px, 36cqw) !important;
   }
 
-  .main-trackInfo-name,
-  .main-trackInfo-name * {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child),
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
     font-size: 21px !important;
     line-height: 28px !important;
   }
 
-  .main-trackInfo-artists,
-  .main-trackInfo-artists * {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)),
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)) * {
     font-size: 14px !important;
     line-height: 20px !important;
   }
 
   /* A narrow now-playing pane: smaller song name, so more of it shows. */
   @container (max-width: 340px) {
-    .main-trackInfo-name,
-    .main-trackInfo-name * {
+    :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child),
+    :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:first-child) * {
       font-size: 16px !important;
       line-height: 22px !important;
     }
 
-    .main-trackInfo-artists,
-    .main-trackInfo-artists * {
+    :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)),
+    :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]) > div:nth-child(2) > div:not(:first-child)) * {
       font-size: 12px !important;
     }
   }
@@ -501,12 +510,12 @@ html:not(.tty-compact) {
      (theme.js clicks Spotify's hidden buttons for them), and the lyrics run
      along the top border instead of Spotify's lyrics view, which is heavy
      enough to slow the games. Compact view keeps Spotify's own controls. */
-  .main-nowPlayingBar-right {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button])) {
     display: flex !important;
     justify-content: flex-end;
   }
 
-  .main-nowPlayingBar-extraControls {
+  :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) {
     display: none !important;
   }
 
@@ -514,12 +523,12 @@ html:not(.tty-compact) {
     display: block;
   }
 
-  .player-controls__buttons button:not([data-testid="control-button-playpause"]) {
+  :is([data-testid=general-controls]) button:not([data-testid="control-button-playpause"]) {
     min-width: 48px !important;
     min-height: 48px !important;
   }
 
-  .player-controls__buttons button:not([data-testid="control-button-playpause"]) svg {
+  :is([data-testid=general-controls]) button:not([data-testid="control-button-playpause"]) svg {
     width: 24px !important;
     height: 24px !important;
   }
@@ -532,7 +541,7 @@ html.tty-compact {
     display: none;
   }
 
-  .playback-bar .progress-bar {
+  :is(div:has(> [data-testid=playback-position])) :is([data-testid=progress-bar]) {
     --fg-color: var(--spice-button) !important;
   }
 }
@@ -577,47 +586,47 @@ html:not(.tty-spotify) {
   }
 
   & body,
-  .Root__top-container,
-  .Root__globalNav,
-  .main-yourLibraryX-entryPoints,
-  .Root__main-view,
-  .Root__right-sidebar-peek,
-  .main-topBar-background {
+  :is(div:has(> #main-view)),
+  :is(#global-nav-bar),
+  :is(#Desktop_LeftSidebar_Id > nav > div),
+  :is(#main-view),
+  :is(div:has(> #main-view) > div > div:has(#Desktop_PanelContainer_Id)),
+  :is([data-testid=topbar] > :not(:has([data-testid=topbar-content-wrapper]))) {
     background: var(--spice-main) !important;
   }
 
   /* Drop Spotify's colored page gradients; a terminal has one background. */
   [data-testid="shortcut-background"],
-  .main-entityHeader-container > [style*="background-color"],
-  .main-entityHeader-container > [style*="background-color"] + div:not(.main-entityHeader-contentWrapper),
-  .main-entityHeader-container ~ [style*="background-color"] {
+  :is([data-testid=entity-header]) > :not(:has(h1)),
+  :is([data-testid=entity-header]) ~ [style*="background-color"],
+  :is([data-testid=entity-header]) + * > [style*=--background-base] {
     background: none !important;
   }
 
   /* Artwork as a green halftone screen: tinted green and shown through a dot
      grid, like an old monitor. Full color when you point at it. */
-  :is(.Root__main-view, .Root__nav-bar, .Root__right-sidebar) img {
+  :is(:is(#main-view), :is(#Desktop_LeftSidebar_Id), :is(#Desktop_PanelContainer_Id)) img {
     filter: grayscale(1) sepia(1) hue-rotate(70deg) saturate(2.2) contrast(1.15);
     mask-image: radial-gradient(circle closest-side, #000 72%, transparent 78%);
     mask-size: 4px 4px;
     transition: filter 0.15s;
   }
 
-  :is(.Root__main-view, .Root__nav-bar, .Root__right-sidebar) :is(a, button, [role="row"], .main-card-card):hover img {
+  :is(:is(#main-view), :is(#Desktop_LeftSidebar_Id), :is(#Desktop_PanelContainer_Id)) :is(a, button, [role="row"], :is([data-encore-id=card])):hover img {
     filter: none;
     mask-image: none;
   }
 
   /* Whatever sits behind artwork (some covers have colored backdrops) would
      show between the dots; keep the gaps dark. */
-  :is(.Root__main-view, .Root__nav-bar, .Root__right-sidebar) :is(:has(> img), .main-cardImage-imageWrapper) {
+  :is(:is(#main-view), :is(#Desktop_LeftSidebar_Id), :is(#Desktop_PanelContainer_Id)) :is(:has(> img), :is([style*=--card-color])) {
     background-color: transparent !important;
   }
 
   /* Panes: tmux-style borders with a title on the top edge. */
-  .Root__nav-bar::after,
-  .Root__main-view::after,
-  .Root__right-sidebar-peek::after {
+  :is(#Desktop_LeftSidebar_Id)::after,
+  :is(#main-view)::after,
+  :is(div:has(> #main-view) > div > div:has(#Desktop_PanelContainer_Id))::after {
     content: "";
     position: absolute;
     inset: 7px 0 0;
@@ -626,9 +635,9 @@ html:not(.tty-spotify) {
     box-shadow: inset 0 0 0 1px var(--tty-line);
   }
 
-  .Root__nav-bar::before,
-  .Root__main-view::before,
-  .Root__right-sidebar-peek::before {
+  :is(#Desktop_LeftSidebar_Id)::before,
+  :is(#main-view)::before,
+  :is(div:has(> #main-view) > div > div:has(#Desktop_PanelContainer_Id))::before {
     position: absolute;
     top: 0;
     left: 14px;
@@ -641,120 +650,119 @@ html:not(.tty-spotify) {
     pointer-events: none;
   }
 
-  .Root__nav-bar::before {
+  :is(#Desktop_LeftSidebar_Id)::before {
     content: "library";
   }
 
-  .Root__main-view::before {
+  :is(#main-view)::before {
     content: "main";
   }
 
-  .Root__right-sidebar-peek::before {
+  :is(div:has(> #main-view) > div > div:has(#Desktop_PanelContainer_Id))::before {
     content: "sidebar";
   }
 
   /* Top bar. */
-  .main-globalNav-searchContainer input {
+  :is(#global-nav-bar form[role=search]) input {
     background: var(--spice-main) !important;
     box-shadow: inset 0 0 0 1px var(--tty-line) !important;
     color: var(--spice-text) !important;
     caret-color: var(--spice-text);
   }
 
-  .main-globalNav-searchContainer input:is(:hover, :focus) {
+  :is(#global-nav-bar form[role=search]) input:is(:hover, :focus) {
     box-shadow: inset 0 0 0 1px var(--tty-line-hot) !important;
   }
 
-  .main-globalNav-searchContainer input::placeholder {
+  :is(#global-nav-bar form[role=search]) input::placeholder {
     color: var(--spice-subtext) !important;
   }
 
-  .main-globalNav-link-icon,
-  .Root__globalNav [data-testid="user-widget-link"] {
+  :is(#global-nav-bar button:has(+ div > form[role=search])),
+  :is(#global-nav-bar) [data-testid="user-widget-link"] {
     background: transparent !important;
     box-shadow: inset 0 0 0 1px var(--tty-line);
   }
 
-  .main-globalNav-link-icon:hover,
-  .Root__globalNav [data-testid="user-widget-link"]:hover {
+  :is(#global-nav-bar button:has(+ div > form[role=search])):hover,
+  :is(#global-nav-bar) [data-testid="user-widget-link"]:hover {
     box-shadow: inset 0 0 0 1px var(--tty-line-hot);
   }
 
   /* Headings. Section titles read like shell comments. */
-  .Root__main-view :is(h1, h2) {
+  :is(#main-view) :is(h1, h2) {
     letter-spacing: -0.01em;
   }
 
   /* Titles in green; section titles are often links inside the heading. */
-  .Root__main-view :is(h1, h2, h1 a, h2 a) {
+  :is(#main-view) :is(h1, h2, h1 a, h2 a) {
     color: var(--spice-button) !important;
   }
 
-  .Root__main-view h1 {
+  :is(#main-view) h1 {
     font-size: clamp(28px, 4.2vw, 56px) !important;
   }
 
-  .Root__main-view h2 > span:first-child::before,
-  .Root__main-view h2:not(:has(> span))::before {
+  :is(#main-view) h2 > span:first-child::before,
+  :is(#main-view) h2:not(:has(> span))::before {
     content: "# ";
     color: var(--spice-subtext);
     font-weight: 400;
   }
 
-  .main-yourLibraryX-header h1 {
+  :is(#Desktop_LeftSidebar_Id header) h1 {
     color: var(--spice-text) !important;
   }
 
   /* Lists: cursor-line hover, reverse-video selection. */
-  .main-rootlist-wrapper [role="row"]:hover,
-  .main-trackList-trackListRow:hover,
-  .main-contextMenu-menuItemButton:is(:hover, :focus) {
+  :is(#Desktop_LeftSidebar_Id [role=grid]) [role="row"]:hover,
+  :is([role=row][aria-selected] > [role=presentation]):hover,
+  :is([role=menu] [role=menuitem]):is(:hover, :focus) {
     background: var(--tty-hover) !important;
   }
 
-  .main-rootlist-wrapper [role="row"][aria-selected="true"],
-  .main-trackList-trackListRow[aria-selected="true"],
-  .main-trackList-selected {
+  :is(#Desktop_LeftSidebar_Id [role=grid]) [role="row"][aria-selected="true"],
+  :is([role=row][aria-selected=true] > [role=presentation]) {
     background: var(--spice-text) !important;
   }
 
-  :is(.main-rootlist-wrapper [role="row"][aria-selected="true"], .main-trackList-trackListRow[aria-selected="true"], .main-trackList-selected) * {
+  :is(:is(#Desktop_LeftSidebar_Id [role=grid]) [role="row"][aria-selected="true"], :is([role=row][aria-selected=true] > [role=presentation])) * {
     color: var(--spice-main) !important;
     fill: var(--spice-main) !important;
   }
 
   /* Filter chips: boxed labels, reverse video when active. */
-  .Root__nav-bar [role="option"] span,
-  .Root__main-view button[role="checkbox"] {
+  :is(#Desktop_LeftSidebar_Id) [role="option"] span,
+  :is(#main-view) button[role="checkbox"] {
     background: transparent !important;
     box-shadow: inset 0 0 0 1px var(--tty-line);
     color: var(--spice-text) !important;
   }
 
-  .Root__nav-bar [role="option"]:hover span,
-  .Root__main-view button[role="checkbox"]:hover {
+  :is(#Desktop_LeftSidebar_Id) [role="option"]:hover span,
+  :is(#main-view) button[role="checkbox"]:hover {
     box-shadow: inset 0 0 0 1px var(--tty-line-hot);
   }
 
-  .Root__nav-bar [role="option"]:is([aria-selected="true"], [aria-checked="true"]) span,
-  .Root__main-view button[role="checkbox"][aria-checked="true"] {
+  :is(#Desktop_LeftSidebar_Id) [role="option"]:is([aria-selected="true"], [aria-checked="true"]) span,
+  :is(#main-view) button[role="checkbox"][aria-checked="true"] {
     background: var(--spice-text) !important;
     color: var(--spice-main) !important;
   }
 
   /* Cards. */
-  .main-card-card {
+  :is([data-encore-id=card]) {
     background: transparent !important;
     box-shadow: none !important;
   }
 
-  .main-card-card:is(:hover, :focus-within) {
+  :is([data-encore-id=card]):is(:hover, :focus-within) {
     background: var(--tty-hover) !important;
     box-shadow: inset 0 0 0 1px var(--tty-line) !important;
   }
 
   /* Menus and scrollbars. */
-  .main-contextMenu-menu,
+  :is(#context-menu [role=menu]),
   [data-tippy-root] [role="menu"] {
     background: var(--spice-main) !important;
     box-shadow: 0 0 0 1px var(--tty-line) !important;
@@ -919,7 +927,7 @@ html:not(.tty-spotify) {
 
 @media (prefers-reduced-motion: reduce) {
   .tty-cursor,
-  html.tty-playing .main-nowPlayingBar-container::before {
+  html.tty-playing :is([data-testid=now-playing-bar])::before {
     animation: none !important;
   }
 }
@@ -931,21 +939,21 @@ html:not(.tty-spotify) {
 
 html:not(.tty-spotify) {
 
-  .Root__now-playing-bar {
+  :is(div:has(> [data-testid=now-playing-bar])) {
     :is(
-      .player-controls__left button,
-      .player-controls__right button,
+      :is([data-testid=general-controls] > div:first-child) button,
+      :is([data-testid=general-controls] > div:last-child) button,
       [data-testid="control-button-playpause"],
-      .main-nowPlayingBar-extraControls button
+      :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) button
     ) svg {
       display: none !important;
     }
 
     :is(
-      .player-controls__left button,
-      .player-controls__right button,
+      :is([data-testid=general-controls] > div:first-child) button,
+      :is([data-testid=general-controls] > div:last-child) button,
       [data-testid="control-button-playpause"],
-      .main-nowPlayingBar-extraControls button
+      :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) button
     ) span:has(> svg)::before {
       font-size: 12px;
       font-weight: 700;
@@ -956,7 +964,7 @@ html:not(.tty-spotify) {
 
     [data-testid="control-button-skip-back"] span:has(> svg)::before { content: "[<<]"; }
     [data-testid="control-button-skip-forward"] span:has(> svg)::before { content: "[>>]"; }
-    .player-controls__left button:first-child span:has(> svg)::before { content: "[shuf]"; }
+    :is([data-testid=general-controls] > div:first-child) button:first-child span:has(> svg)::before { content: "[shuf]"; }
     [data-testid="control-button-repeat"] span:has(> svg)::before { content: "[rep]"; }
     [data-testid="control-button-repeat"][aria-label="Disable repeat"] span:has(> svg)::before { content: "[rep1]"; }
     [data-testid="control-button-playpause"] span:has(> svg)::before { content: ">"; }
@@ -969,27 +977,27 @@ html:not(.tty-spotify) {
     [data-testid="fullscreen-mode-button"] span:has(> svg)::before { content: "[full]"; }
 
     /* The icon slots were sized for square glyphs; let the labels breathe. */
-    :is(.player-controls__left, .player-controls__right, .main-nowPlayingBar-extraControls) button {
+    :is(:is([data-testid=general-controls] > div:first-child), :is([data-testid=general-controls] > div:last-child), :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue))) button {
       width: auto !important;
       padding-inline: 4px !important;
     }
 
-    :is(.player-controls__left, .player-controls__right, .main-nowPlayingBar-extraControls) button span:has(> svg) {
+    :is(:is([data-testid=general-controls] > div:first-child), :is([data-testid=general-controls] > div:last-child), :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue))) button span:has(> svg) {
       width: auto !important;
       height: auto !important;
     }
   }
 
-  &.tty-playing .Root__now-playing-bar [data-testid="control-button-playpause"] span:has(> svg)::before {
+  &.tty-playing :is(div:has(> [data-testid=now-playing-bar])) [data-testid="control-button-playpause"] span:has(> svg)::before {
     content: "||";
   }
 
   /* Bigger labels in the games view, where the controls have room. */
-  &:not(.tty-compact) .Root__now-playing-bar {
+  &:not(.tty-compact) :is(div:has(> [data-testid=now-playing-bar])) {
     :is(
-      .player-controls__left button,
-      .player-controls__right button,
-      .main-nowPlayingBar-extraControls button
+      :is([data-testid=general-controls] > div:first-child) button,
+      :is([data-testid=general-controls] > div:last-child) button,
+      :is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) button
     ) span:has(> svg)::before {
       font-size: 15px;
     }
@@ -1234,14 +1242,14 @@ html.tty-spotify {
     color: var(--text-base, #fff);
   }
 
-  .main-nowPlayingWidget-nowPlaying,
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2])),
   .tty-queue {
     border-radius: 8px;
     box-shadow: none;
     background: var(--background-elevated-base, #1f1f1f);
   }
 
-  .main-nowPlayingWidget-nowPlaying::before {
+  :is(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]))::before {
     content: none;
   }
 
@@ -1287,9 +1295,22 @@ html.tty-spotify {
   }
 
   /* Spotify's white round play button, floating over the timeline. */
-  .player-controls [data-testid="control-button-playpause"] > span {
+  :is([data-testid=player-controls]) [data-testid="control-button-playpause"] > span {
     color: #000 !important;
     background: #fff !important;
     border-radius: 50% !important;
+  }
+}
+
+/* Spotify look, compact view: the switches get their own strip above the
+   player instead of sitting on the song title. */
+html.tty-spotify.tty-compact {
+  [data-testid=now-playing-bar] {
+    padding-top: 26px !important;
+    box-sizing: content-box;
+  }
+
+  .tty-switchbar {
+    top: 4px;
   }
 }

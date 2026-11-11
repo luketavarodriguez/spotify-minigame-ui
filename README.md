@@ -63,13 +63,21 @@ Install the Spotify Minigame UI theme on my computer:
 
 Color schemes: `tty` (default), `amber` and `green`. Switch with `spicetify config color_scheme amber && spicetify apply`.
 
+## Built on Spotify's own labels
+
+Most Spicetify themes style Spotify through Spicetify's class-name map. Spotify scrambles its class names, and the map turns them back into readable ones. Each Spotify update scrambles them again, so a theme built on the map breaks until Spicetify ships a new one.
+
+This theme doesn't use the map. It finds its way around the app with labels Spotify builds in itself: test IDs like `now-playing-bar`, element IDs like `main-view`, and accessibility roles. It keeps working as long as Spotify keeps those labels.
+
+Spicetify is still how the theme loads into the app. You still need it installed, and you still run it after a Spotify update.
+
 ## Good to know
 
 - **Where the switches are:** the controls sit on the player bar's top border: game, mode, level, look and view.
 - **When the beat data is missing:** beat sync and lyrics come from Spotify's own client endpoints. Songs without analysis, and podcasts or local files, play the games without beat sync.
 - **How stats are counted:** the theme keeps the stats itself, in local storage, from the day you install it. A play counts after 30 seconds of listening. Only listening in this Spotify app is counted.
-- **What it's tested on:** Spotify 1.3.3 with Spicetify 2.45.3 on macOS.
-- **After a Spotify update:** Spotify updates wipe Spicetify's changes. Run `spicetify upgrade`, then `spicetify apply`, and the theme comes back. New Spotify versions often need the newer Spicetify.
+- **What it's tested on:** Spotify 1.3.8 with Spicetify 2.46.4 on macOS.
+- **After a Spotify update:** Spotify updates wipe Spicetify's changes. Run `spicetify upgrade`, then `spicetify apply`, and the theme comes back. New Spotify versions often need the newer Spicetify. If Spicetify says the client is in stock state or the backup doesn't match, run `spicetify backup apply` instead.
 
 ## Credits
 
