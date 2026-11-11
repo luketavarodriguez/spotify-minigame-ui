@@ -6,6 +6,6 @@
   "usercss": "user.css",
   "schemes": "color.ini",
   "include": ["https://raw.githubusercontent.com/luketavarodriguez/spotify-minigame-ui/main/theme.js"],
-  "authors": [{ "name": "luketavarodriguez", "url": "https://github.com/lukerodriguez8" }],
+  "authors": [{ "name": "luketavarodriguez", "url": "https://github.com/luketavarodriguez" }],
   "tags": ["games", "terminal", "lyrics", "beat sync"]
 }
