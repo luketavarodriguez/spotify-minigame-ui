@@ -1437,8 +1437,13 @@
   const queueBox = el("div", "tty-queue");
   queueBox.setAttribute("aria-label", "Up next");
   const queueList = el("ol", "tty-queue-list");
-  const queueNow = el("span", "tty-queue-now"); // The playing song's BPM and key, on the pane's border.
-  queueBox.append(queueNow, queueList);
+  // On the pane's top border: the smooth command, then the playing song's BPM and key.
+  const queueBar = el("div", "tty-queue-bar");
+  const smoothButton = el("button", "tty-queue-smooth", "smooth");
+  smoothButton.type = "button";
+  const queueNow = el("span", "tty-queue-now");
+  queueBar.append(smoothButton, queueNow);
+  queueBox.append(queueBar, queueList);
   let queueSignature = null;
 
   // "175  3A": tempo in beats per minute, then the key's place on the Camelot
@@ -1449,9 +1454,188 @@
     return mix;
   };
 
+  // How well one song runs into the next, from the two things a DJ matches.
+  //   Tempo: within 6% is close enough to beatmatch. Half and double time
+  //   count as the same tempo, since 87 and 174 share a beat.
+  //   Key: the same spot on the Camelot wheel, one step round it, or its
+  //   major/minor twin.
+  // "clean" fits on both, "rough" on neither. The cost is what smooth adds up.
+  const transition = (from, to) => {
+    let tempo = null;
+    if (from?.[0] && to?.[0]) {
+      const octaves = Math.abs(Math.log2(to[0] / from[0])) % 1;
+      tempo = 2 ** Math.min(octaves, 1 - octaves) - 1; // 0.06 = 6% apart
+    }
+    let key = null;
+    const a = /^(\d+)([AB])$/.exec(from?.[1] ?? "");
+    const b = /^(\d+)([AB])$/.exec(to?.[1] ?? "");
+    if (a && b) {
+      const steps = Math.min((a[1] - b[1] + 12) % 12, (b[1] - a[1] + 12) % 12);
+      key = steps === 0 ? (a[2] === b[2] ? 0 : 0.4) : steps === 1 && a[2] === b[2] ? 0.4 : 2;
+    }
+    const tempoFits = tempo !== null && tempo <= 0.06;
+    const keyFits = key !== null && key < 2;
+    return {
+      cost: (tempo === null ? 1.5 : Math.min(tempo / 0.04, 3)) + (key ?? 1.5),
+      grade: tempoFits && keyFits ? "clean" : tempo !== null && key !== null && !tempoFits && !keyFits ? "rough" : "",
+    };
+  };
+
+  // The order of `songs` that runs smoothest after `first`. Start with the
+  // nearest song each time, then keep flipping stretches and moving single
+  // songs while the total gets lower. Thirty songs take a few milliseconds.
+  const smoothest = (first, songs) => {
+    const cost = (a, b) => transition(a?.facts, b?.facts).cost;
+    const total = (order) => order.reduce((sum, song, i) => sum + cost(i ? order[i - 1] : first, song), 0);
+    let order = [];
+    const left = [...songs];
+    let last = first;
+    while (left.length) {
+      let best = 0;
+      for (let i = 1; i < left.length; i += 1) if (cost(last, left[i]) < cost(last, left[best]) - 1e-9) best = i;
+      last = left.splice(best, 1)[0];
+      order.push(last);
+    }
+    let score = total(order);
+    for (let pass = 0, improved = true; improved && pass < 40; pass += 1) {
+      improved = false;
+      for (let i = 0; i < order.length; i += 1) {
+        for (let j = 0; j < order.length; j += 1) {
+          if (i === j) continue;
+          const flipped = i < j ? [...order.slice(0, i), ...order.slice(i, j + 1).reverse(), ...order.slice(j + 1)] : null;
+          const moved = [...order];
+          moved.splice(j, 0, moved.splice(i, 1)[0]);
+          for (const candidate of [flipped, moved]) {
+            if (!candidate) continue;
+            const candidateScore = total(candidate);
+            if (candidateScore < score - 1e-9) {
+              order = candidate;
+              score = candidateScore;
+              improved = true;
+            }
+          }
+        }
+      }
+    }
+    // Leave the queue alone unless the gain is real.
+    return score < total(songs) - 0.5 ? order : songs;
+  };
+
+  // The upcoming songs smooth works on: the next 30, split into the songs
+  // you queued yourself and the ones coming from the playlist or album.
+  // Spotify plays queued songs first, so each group is ordered on its own.
+  const SMOOTH_WINDOW = 30;
+  const upcoming = () => (state().nextItems ?? []).filter((item) => /^spotify:(track|episode|local):/.test(item?.uri ?? ""));
+  const withFacts = (item) => ({ item, facts: songFacts(item.uri) });
+  const sameSong = (a, b) => (a?.uid && b?.uid ? a.uid === b.uid : a?.uri === b?.uri);
+  const smoothGroups = () => {
+    const next = upcoming();
+    const ahead = next.slice(0, SMOOTH_WINDOW);
+    const queued = [];
+    while (queued.length < ahead.length && ahead[queued.length].provider === "queue") queued.push(ahead[queued.length]);
+    const rest = ahead.slice(queued.length);
+    // Spotify finds a song to move by its queue id, or by its address when it
+    // has none. A song that can't be told apart from another copy stays put.
+    const count = (value, of) => next.filter((item) => of(item) === value).length;
+    const distinct = (item) => (item.uid ? count(item.uid, (other) => other.uid) === 1 : count(item.uri, (other) => other.uri) === 1);
+    return [
+      { songs: queued, after: next[queued.length] },
+      { songs: rest, after: next[ahead.length] },
+    ].filter((group) => group.songs.length > 1 && group.songs.every(distinct) && (!group.after || distinct(group.after)));
+  };
+
+  const cleanCount = (first, items) => items.reduce((count, item, i) => count + (transition(songFacts(i ? items[i - 1].uri : first), songFacts(item.uri)).grade === "clean" ? 1 : 0), 0);
+
+  // Put `wanted` in that order. Spotify's reorder moves songs to sit before
+  // one that stays put: the song after the group, or the group's own last.
+  const reorder = async (wanted, after) => {
+    const ref = (item) => ({ uid: item.uid, uri: item.uri });
+    const anchor = after ?? wanted.at(-1);
+    const moving = after ? wanted : wanted.slice(0, -1);
+    if (!moving.length) return;
+    await S.Platform.PlayerAPI.reorderQueue(moving.map(ref), { before: ref(anchor) });
+    // Wait for the player to report the new order before touching it again.
+    for (let tries = 0; tries < 30; tries += 1) {
+      const next = upcoming();
+      const at = next.findIndex((item) => sameSong(item, wanted[0]));
+      if (at >= 0 && wanted.every((item, i) => sameSong(next[at + i], item))) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  };
+
+  let smoothUndo = null; // { groups: the orders before smooth, signature: the queue smooth left behind }
+  let smoothBusy = false;
+  let smoothNote = null; // { text, until }
+  const windowSignature = () => upcoming().slice(0, SMOOTH_WINDOW).map((item) => item.uid ?? item.uri).join("|");
+  const note = (text) => {
+    smoothNote = { text, until: Date.now() + 4000 };
+    showSmooth();
+  };
+
+  const showSmooth = () => {
+    if (smoothUndo && smoothUndo.signature !== windowSignature()) smoothUndo = null; // The queue moved on.
+    if (smoothNote && Date.now() > smoothNote.until) smoothNote = null;
+    const text = smoothBusy ? "..." : smoothNote ? smoothNote.text : smoothUndo ? "undo" : "smooth";
+    if (smoothButton.textContent !== text) smoothButton.textContent = text;
+    smoothButton.classList.toggle("is-note", Boolean(smoothBusy || smoothNote));
+    smoothButton.hidden = upcoming().length < 3;
+    smoothButton.title = smoothUndo ? "Put the queue back the way it was" : "Reorder the next 30 songs so tempos and keys run into each other";
+  };
+
+  const smooth = async () => {
+    if (smoothBusy || smoothNote) return;
+    smoothBusy = true;
+    showSmooth();
+    try {
+      if (smoothUndo) {
+        for (const group of smoothUndo.groups) await reorder(group.songs, group.after);
+        smoothUndo = null;
+        smoothBusy = false;
+        note("undone");
+        return;
+      }
+      const current = state().item?.uri;
+      const ahead = upcoming().slice(0, SMOOTH_WINDOW);
+      wantSongs([current, ...ahead.map((item) => item.uri)], true);
+      for (let tries = 0; tries < 20 && ahead.some((item) => trackId(item.uri) && !songFacts(item.uri) && !indexMisses.has(trackId(item.uri))); tries += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 150)); // Numbers for songs just outside the pane are still arriving.
+      }
+      const before = cleanCount(current, ahead);
+      const groups = smoothGroups();
+      const undo = [];
+      let first = { facts: songFacts(current) };
+      let changed = false;
+      for (const group of groups) {
+        const songs = group.songs.map(withFacts);
+        const order = smoothest(first, songs);
+        first = order.at(-1);
+        if (order.every((song, i) => song === songs[i])) continue;
+        undo.push({ songs: group.songs, after: group.after });
+        await reorder(order.map((song) => song.item), group.after);
+        changed = true;
+      }
+      smoothBusy = false;
+      if (!changed) {
+        note("already smooth");
+        return;
+      }
+      smoothUndo = { groups: undo, signature: windowSignature() };
+      queueSignature = null;
+      note(`${before} > ${cleanCount(current, upcoming().slice(0, SMOOTH_WINDOW))} clean`);
+    } catch {
+      smoothBusy = false;
+      note("couldn't reorder");
+    }
+  };
+  smoothButton.addEventListener("click", () => {
+    smooth();
+    smoothButton.blur(); // So the keys go back to the game.
+  });
+
   const renderQueue = () => {
+    showSmooth();
     const current = state().item?.uri;
-    const items = (state().nextItems ?? []).filter((item) => /^spotify:(track|episode|local):/.test(item?.uri ?? "")).slice(0, 12);
+    const items = upcoming().slice(0, 12);
     wantSongs([current, ...items.map((item) => item.uri)], true);
     const signature = [current, ...items.map((item) => item.uid ?? item.uri)].map((name, i) => `${name}${songFacts(i ? items[i - 1].uri : current) ? "+" : ""}`).join("|");
     if (signature === queueSignature) return;
@@ -1470,7 +1654,11 @@
         const play = el("button", "tty-queue-play");
         play.type = "button";
         const facts = songFacts(item.uri);
-        play.title = `Play ${artists ? `${item.name} - ${artists}` : item.name ?? ""}${facts ? ` (${Math.round(facts[0])} BPM, key ${facts[1]})` : ""}`;
+        // Bright numbers: this song mixes cleanly with the one before it. Dim: it clashes.
+        const grade = transition(songFacts(i ? items[i - 1].uri : current), facts).grade;
+        if (grade) row.classList.add(`is-${grade}`);
+        const mixes = grade === "clean" ? ", mixes cleanly with the song before" : grade === "rough" ? ", clashes with the song before" : "";
+        play.title = `Play ${artists ? `${item.name} - ${artists}` : item.name ?? ""}${facts ? ` (${Math.round(facts[0])} BPM, key ${facts[1]}${mixes})` : ""}`;
         play.addEventListener("click", () => {
           S.Platform.PlayerAPI?.skipTo?.({ uid: item.uid, uri: item.uri });
           play.blur(); // So the keys go back to the game.

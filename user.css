@@ -1218,7 +1218,8 @@ html.tty-compact .tty-lyricbar {
   color: var(--spice-subtext);
 }
 
-/* Each song's tempo and key, in two right-aligned columns. */
+/* Each song's tempo and key, in two right-aligned columns. They light up
+   when the song mixes cleanly with the one before it, and dim when it clashes. */
 .tty-queue-mix {
   display: flex;
   flex: none;
@@ -1234,18 +1235,23 @@ html.tty-compact .tty-lyricbar {
   text-align: right;
 }
 
-.tty-queue-key {
+.tty-queue-row.is-clean .tty-queue-mix {
   color: var(--tty-line);
 }
 
-/* The playing song's, on the pane's top border, opposite "up next". */
-.tty-queue-now {
+.tty-queue-row.is-rough .tty-queue-mix {
+  opacity: 0.45;
+}
+
+/* On the pane's top border, opposite "up next": the smooth command and the
+   playing song's tempo and key. */
+.tty-queue-bar {
   position: absolute;
   top: -1px;
   right: 12px;
   z-index: 2;
   display: flex;
-  gap: 1ch;
+  gap: 2ch;
   padding: 0 4px;
   background: var(--spice-main);
   color: var(--tty-line);
@@ -1253,7 +1259,42 @@ html.tty-compact .tty-lyricbar {
   line-height: 12px;
 }
 
+.tty-queue-now {
+  display: flex;
+  gap: 1ch;
+}
+
 .tty-queue-now:empty {
+  display: none;
+}
+
+.tty-queue-now .tty-queue-mix {
+  color: inherit;
+}
+
+.tty-queue-smooth {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--spice-subtext);
+  cursor: pointer;
+}
+
+.tty-queue-smooth::before {
+  content: "[";
+}
+
+.tty-queue-smooth::after {
+  content: "]";
+}
+
+.tty-queue-smooth:is(:hover, :focus-visible),
+.tty-queue-smooth.is-note {
+  color: var(--tty-line);
+}
+
+.tty-queue-smooth[hidden] {
   display: none;
 }
 
@@ -1362,7 +1403,7 @@ html.tty-spotify {
     padding-top: 4px;
   }
 
-  .tty-queue-now {
+  .tty-queue-bar {
     top: 14px;
     right: 16px;
     padding: 0;
@@ -1372,8 +1413,24 @@ html.tty-spotify {
     line-height: 16px;
   }
 
-  .tty-queue-key {
+  .tty-queue-row.is-clean .tty-queue-mix {
+    color: var(--text-bright-accent, #1ed760);
+  }
+
+  .tty-queue-smooth {
     color: var(--text-base, #fff);
+    font-weight: 700;
+    text-transform: capitalize;
+  }
+
+  .tty-queue-smooth::before,
+  .tty-queue-smooth::after {
+    content: none;
+  }
+
+  .tty-queue-smooth:is(:hover, :focus-visible),
+  .tty-queue-smooth.is-note {
+    color: var(--text-bright-accent, #1ed760);
   }
 
   .tty-queue-play {
