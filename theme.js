@@ -1273,6 +1273,161 @@
     setLyric(current < 0 ? "♪" : lines[current].text || "♪", lyrics.synced ? "" : "unsynced");
   };
 
+  // ---- Song index: tempo and key for every song -----------------------------------
+  //
+  // Spotify's Mix feature knows each song's BPM and key. The desktop client
+  // asks for them in batches, as "extended metadata" in protobuf, and this
+  // asks the same way: a few hundred songs per request. Answers are kept in
+  // localStorage, so each song is only asked about once. The up-next pane
+  // asks first; Liked Songs fill in behind it, a batch every 1.5 seconds.
+
+  const INDEX_KEY = "tty-song-index-v1";
+  const AUDIO_ATTRIBUTES = 222; // Spotify's number for the BPM-and-key record.
+  const songIndex = new Map(); // track id -> [bpm, key on the Camelot wheel], e.g. [174.9, "3A"]
+  try {
+    for (const [id, facts] of Object.entries(JSON.parse(localStorage.getItem(INDEX_KEY) ?? "{}"))) songIndex.set(id, facts);
+  } catch {}
+  const indexMisses = new Set(); // Songs Spotify has no numbers for. Asked again next session.
+  const wantedNow = new Set();
+  const wantedLater = new Set();
+  let indexBusy = false;
+  let indexDelay = 1500;
+
+  // Just enough protobuf to write the request and read the reply.
+  const pbVarint = (n) => {
+    const out = [];
+    while (n > 127) {
+      out.push((n & 127) | 128);
+      n = Math.floor(n / 128);
+    }
+    out.push(n);
+    return out;
+  };
+  const pbField = (num, bytes) => [...pbVarint((num << 3) | 2), ...pbVarint(bytes.length), ...bytes];
+  const pbText = (num, text) => pbField(num, [...new TextEncoder().encode(text)]);
+  const pbRead = (buf) => {
+    const fields = [];
+    let p = 0;
+    const varint = () => {
+      let n = 0;
+      let scale = 1;
+      let byte;
+      do {
+        byte = buf[p++];
+        n += (byte & 127) * scale;
+        scale *= 128;
+      } while (byte & 128 && p < buf.length);
+      return n;
+    };
+    while (p < buf.length) {
+      const tag = varint();
+      const num = Math.floor(tag / 8);
+      const type = tag & 7;
+      if (type === 0) fields.push([num, varint()]);
+      else if (type === 1) {
+        fields.push([num, new DataView(buf.buffer, buf.byteOffset + p, 8).getFloat64(0, true)]);
+        p += 8;
+      } else if (type === 2) {
+        const length = varint();
+        fields.push([num, buf.subarray(p, p + length)]);
+        p += length;
+      } else if (type === 5) p += 4;
+      else break;
+    }
+    return fields;
+  };
+  const pbAll = (fields, num) => fields.filter(([n]) => n === num).map(([, value]) => value);
+  const pbString = (bytes) => (bytes ? new TextDecoder().decode(bytes) : "");
+
+  const fetchSongFacts = async (ids) => {
+    const body = new Uint8Array(ids.flatMap((id) => pbField(2, [...pbText(1, `spotify:track:${id}`), ...pbField(2, [8, ...pbVarint(AUDIO_ATTRIBUTES)])])));
+    const res = await fetch("https://spclient.wg.spotify.com/extended-metadata/v0/extended-metadata", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${S.Platform.AuthorizationAPI?.getState?.()?.token?.accessToken}`,
+        "Content-Type": "application/protobuf",
+      },
+      body,
+    });
+    if (!res.ok) throw new Error(`song facts: ${res.status}`);
+    const found = new Map();
+    // Reply > one list per kind of record > one entry per song > the record, wrapped.
+    for (const kind of pbAll(pbRead(new Uint8Array(await res.arrayBuffer())), 2)) {
+      for (const entry of pbAll(pbRead(kind), 3)) {
+        const fields = pbRead(entry);
+        const id = pbString(pbAll(fields, 2)[0]).split(":").pop();
+        const wrapped = pbAll(fields, 3)[0];
+        const record = wrapped && pbAll(pbRead(wrapped), 2)[0];
+        if (!id || !record) continue;
+        const attributes = pbRead(record);
+        const bpm = pbAll(attributes, 1)[0] ?? 0;
+        const key = pbAll(attributes, 2)[0];
+        const camelot = key && pbAll(pbRead(key), 3)[0];
+        const wheel = camelot ? pbString(pbAll(pbRead(camelot), 1)[0]) : "";
+        if (bpm > 0 || wheel) found.set(id, [Math.round(bpm * 10) / 10, wheel]);
+      }
+    }
+    return found;
+  };
+
+  const saveIndex = () => {
+    // Past 30,000 songs, the oldest entries go first.
+    if (songIndex.size > 30000) for (const id of [...songIndex.keys()].slice(0, songIndex.size - 25000)) songIndex.delete(id);
+    try {
+      localStorage.setItem(INDEX_KEY, JSON.stringify(Object.fromEntries(songIndex)));
+    } catch {}
+  };
+
+  const pumpIndex = async () => {
+    if (indexBusy || (!wantedNow.size && !wantedLater.size)) return;
+    indexBusy = true;
+    const ids = [...wantedNow, ...wantedLater].slice(0, 200);
+    try {
+      const found = await fetchSongFacts(ids);
+      for (const id of ids) {
+        wantedNow.delete(id);
+        wantedLater.delete(id);
+        if (found.has(id)) songIndex.set(id, found.get(id));
+        else indexMisses.add(id);
+      }
+      saveIndex();
+      indexDelay = 1500;
+      queueSignature = null; // Redraw up next with the new numbers.
+    } catch {
+      indexDelay = Math.min(indexDelay * 4, 600000); // Back off, up to 10 minutes.
+    }
+    indexBusy = false;
+    if (wantedNow.size || wantedLater.size) setTimeout(pumpIndex, wantedNow.size ? 300 : indexDelay);
+  };
+
+  const trackId = (uri) => (/^spotify:track:([A-Za-z0-9]{22})$/.exec(uri ?? "") ?? [])[1];
+  const songFacts = (uri) => songIndex.get(trackId(uri));
+
+  const wantSongs = (uris, now) => {
+    let added = false;
+    for (const uri of uris) {
+      const id = trackId(uri);
+      if (!id || songIndex.has(id) || indexMisses.has(id)) continue;
+      const wanted = now ? wantedNow : wantedLater;
+      if (!wanted.has(id)) added = true;
+      wanted.add(id);
+    }
+    if (added && !indexBusy) setTimeout(pumpIndex, now ? 0 : indexDelay);
+  };
+
+  // Liked Songs, a page at a time. Only songs not yet in the index are asked about.
+  const indexLibrary = async () => {
+    try {
+      for (let offset = 0; ; offset += 500) {
+        const page = await S.Platform.LibraryAPI?.getTracks?.({ limit: 500, offset });
+        const items = page?.items ?? [];
+        wantSongs(items.map((item) => item.uri), false);
+        if (items.length < 500) break;
+      }
+    } catch {}
+  };
+  setTimeout(indexLibrary, 20000);
+
   // ---- Up next, on the right -----------------------------------------------------
   //
   // The next tracks from the player's own queue, in a pane matching the one
@@ -1282,14 +1437,28 @@
   const queueBox = el("div", "tty-queue");
   queueBox.setAttribute("aria-label", "Up next");
   const queueList = el("ol", "tty-queue-list");
-  queueBox.append(queueList);
+  const queueNow = el("span", "tty-queue-now"); // The playing song's BPM and key, on the pane's border.
+  queueBox.append(queueNow, queueList);
   let queueSignature = null;
 
+  // "175  3A": tempo in beats per minute, then the key's place on the Camelot
+  // wheel, where neighbouring numbers and the same number mix cleanly.
+  const mixLabel = (facts) => {
+    const mix = el("span", "tty-queue-mix");
+    mix.append(el("span", "tty-queue-bpm", facts[0] ? String(Math.round(facts[0])) : ""), el("span", "tty-queue-key", facts[1] ?? ""));
+    return mix;
+  };
+
   const renderQueue = () => {
+    const current = state().item?.uri;
     const items = (state().nextItems ?? []).filter((item) => /^spotify:(track|episode|local):/.test(item?.uri ?? "")).slice(0, 12);
-    const signature = items.map((item) => item.uid ?? item.uri).join("|");
+    wantSongs([current, ...items.map((item) => item.uri)], true);
+    const signature = [current, ...items.map((item) => item.uid ?? item.uri)].map((name, i) => `${name}${songFacts(i ? items[i - 1].uri : current) ? "+" : ""}`).join("|");
     if (signature === queueSignature) return;
     queueSignature = signature;
+    const playing = songFacts(current);
+    queueNow.replaceChildren(...(playing ? [el("span", "tty-queue-now-word", "now"), mixLabel(playing)] : []));
+    queueNow.title = playing ? `Playing now: ${Math.round(playing[0])} BPM, key ${playing[1]}` : "";
     if (!items.length) {
       queueList.replaceChildren(el("li", "tty-queue-note", "nothing up next"));
       return;
@@ -1300,12 +1469,14 @@
         const artists = (item.artists ?? []).map((artist) => artist.name).join(", ");
         const play = el("button", "tty-queue-play");
         play.type = "button";
-        play.title = `Play ${artists ? `${item.name} - ${artists}` : item.name ?? ""}`;
+        const facts = songFacts(item.uri);
+        play.title = `Play ${artists ? `${item.name} - ${artists}` : item.name ?? ""}${facts ? ` (${Math.round(facts[0])} BPM, key ${facts[1]})` : ""}`;
         play.addEventListener("click", () => {
           S.Platform.PlayerAPI?.skipTo?.({ uid: item.uid, uri: item.uri });
           play.blur(); // So the keys go back to the game.
         });
         play.append(el("span", "tty-queue-num", String(i + 1).padStart(2, "0")), el("span", "tty-queue-title", item.name ?? ""), el("span", "tty-queue-artist", artists));
+        if (facts) play.append(mixLabel(facts));
         row.append(play);
         return row;
       }),

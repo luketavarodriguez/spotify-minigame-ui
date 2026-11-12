@@ -1218,6 +1218,45 @@ html.tty-compact .tty-lyricbar {
   color: var(--spice-subtext);
 }
 
+/* Each song's tempo and key, in two right-aligned columns. */
+.tty-queue-mix {
+  display: flex;
+  flex: none;
+  gap: 1ch;
+  margin-left: auto;
+  color: var(--spice-subtext);
+  font-variant-numeric: tabular-nums;
+}
+
+.tty-queue-bpm,
+.tty-queue-key {
+  width: 3ch;
+  text-align: right;
+}
+
+.tty-queue-key {
+  color: var(--tty-line);
+}
+
+/* The playing song's, on the pane's top border, opposite "up next". */
+.tty-queue-now {
+  position: absolute;
+  top: -1px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 1ch;
+  padding: 0 4px;
+  background: var(--spice-main);
+  color: var(--tty-line);
+  font-size: 11px;
+  line-height: 12px;
+}
+
+.tty-queue-now:empty {
+  display: none;
+}
+
 .tty-queue-note {
   padding-top: 64px;
   text-align: center;
@@ -1321,6 +1360,20 @@ html.tty-spotify {
 
   .tty-queue-list {
     padding-top: 4px;
+  }
+
+  .tty-queue-now {
+    top: 14px;
+    right: 16px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-subdued, #b3b3b3);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  .tty-queue-key {
+    color: var(--text-base, #fff);
   }
 
   .tty-queue-play {

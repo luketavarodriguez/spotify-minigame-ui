@@ -18,7 +18,7 @@ Developed by [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagra
   - The shooter's gun fires on the beat and the aliens march to it.
   - On auto, the difficulty follows the song's BPM.
 - **Lyrics** scroll one line at a time along the top border.
-- **Up next:** the queue sits on the right. Click a song to play it.
+- **Up next:** the queue sits on the right. Click a song to play it. Each song shows its BPM and its key on the Camelot wheel, so you can see which songs will mix well before they play.
 - **Listening stats** on Home: session, today and this month, plus top songs and artists.
 - **Two looks:** the terminal look (monospace, green borders, green halftone artwork) or Spotify's own look, keeping the layout and the games.
 - **Two views:** the tall games view, or a compact player bar with no games.
@@ -76,8 +76,25 @@ Spicetify is still how the theme loads into the app. You still need it installed
 - **Where the switches are:** the controls sit on the player bar's top border: game, mode, level, look and view.
 - **When the beat data is missing:** beat sync and lyrics come from Spotify's own client endpoints. Songs without analysis, and podcasts or local files, play the games without beat sync.
 - **How stats are counted:** the theme keeps the stats itself, in local storage, from the day you install it. A play counts after 30 seconds of listening. Only listening in this Spotify app is counted.
-- **What it's tested on:** Spotify 1.3.8 with Spicetify 2.46.4 on macOS.
-- **After a Spotify update:** Spotify updates wipe Spicetify's changes. Run `spicetify upgrade`, then `spicetify apply`, and the theme comes back. New Spotify versions often need the newer Spicetify. If Spicetify says the client is in stock state or the backup doesn't match, run `spicetify backup apply` instead.
+- **Where BPM and key come from:** Spotify's own numbers, the ones behind its Mix feature. The theme asks for them in batches and keeps them in local storage, so each song is asked about once. It also indexes your Liked Songs in the background, about a minute for 6,000 songs.
+- **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS.
+- **After a Spotify update:** Spotify updates wipe Spicetify's changes. On macOS, [self-repair](#self-repair-on-macos) puts the theme back for you. By hand: run `spicetify upgrade`, then `spicetify backup apply`. New Spotify versions often need the newer Spicetify. If the theme is showing and you only want to refresh it, `spicetify apply` is enough.
+
+## Self-repair on macOS
+
+Every Spotify update removes the theme. Self-repair notices and puts it back. Turn it on once, from the theme's folder:
+
+```bash
+sh self-repair.sh install
+```
+
+It checks at login, every 30 minutes, and whenever Spotify's files change. When the patch is gone, a Terminal window opens, updates Spicetify, re-applies the theme and tells you what it did. If Spotify was opened in the last 3 minutes, it restarts Spotify for you. Otherwise it leaves your music alone and the theme shows the next time Spotify starts.
+
+**Allow Terminal first.** macOS only lets programs you've approved change another app. Open System Settings, then Privacy & Security, then App Management, turn on Terminal, and reopen Terminal.
+
+This matters beyond self-repair. If Spicetify runs from a program macOS is blocking, it can delete Spotify's interface files and then fail to write them back, which leaves Spotify broken until you run `spicetify apply` from a program that's allowed. Self-repair checks that it can write before it starts Spicetify, so a blocked run changes nothing.
+
+`sh self-repair.sh status` shows whether it's on and what it last did. `sh self-repair.sh remove` turns it off.
 
 ## Credits
 
