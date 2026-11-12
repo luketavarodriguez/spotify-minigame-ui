@@ -1476,6 +1476,7 @@
     const tempoFits = tempo !== null && tempo <= 0.06;
     const keyFits = key !== null && key < 2;
     return {
+      keyFits,
       cost: (tempo === null ? 1.5 : Math.min(tempo / 0.04, 3)) + (key ?? 1.5),
       grade: tempoFits && keyFits ? "clean" : tempo !== null && key !== null && !tempoFits && !keyFits ? "rough" : "",
     };
@@ -1675,6 +1676,451 @@
     const right = document.querySelector(".tty-right");
     if (right && queueBox.parentElement !== right) right.prepend(queueBox);
   };
+
+  // ---- Console: the prompt takes commands --------------------------------------
+  //
+  // Click the prompt in the top bar, or press ` (backtick), and type. Commands
+  // search Liked Songs by tempo and key, queue what they find, smooth the
+  // queue and build sets. They all run on the song index above.
+
+  let library = null;
+  let libraryAt = 0;
+  const loadLibrary = async () => {
+    if (library && Date.now() - libraryAt < 600000) return library;
+    const songs = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await S.Platform.LibraryAPI.getTracks({ limit: 500, offset });
+      const items = page?.items ?? [];
+      for (const item of items) {
+        if (!trackId(item.uri)) continue;
+        songs.push({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0 });
+      }
+      if (items.length < 500) break;
+    }
+    library = songs;
+    libraryAt = Date.now();
+    wantSongs(songs.map((song) => song.uri), false);
+    return songs;
+  };
+
+  const consoleBox = el("div", "tty-console");
+  consoleBox.hidden = true;
+  const consoleOut = el("div", "tty-console-out");
+  const consoleLine = el("label", "tty-console-line");
+  const consolePrompt = el("span", "tty-console-prompt");
+  const consoleInput = el("input", "tty-console-input");
+  consoleInput.type = "text";
+  consoleInput.spellcheck = false;
+  consoleInput.autocomplete = "off";
+  consoleInput.setAttribute("aria-label", "Command");
+  consoleLine.append(consolePrompt, consoleInput);
+  consoleBox.append(consoleOut, consoleLine);
+  document.body.append(consoleBox);
+
+  const print = (text, kind) => {
+    const row = el("div", kind ? `tty-console-row is-${kind}` : "tty-console-row", text);
+    consoleOut.append(row);
+    while (consoleOut.childElementCount > 300) consoleOut.firstElementChild.remove();
+    consoleOut.scrollTop = consoleOut.scrollHeight;
+    return row;
+  };
+
+  const queueSongs = async (songs) => {
+    if (!songs.length) return;
+    await S.Platform.PlayerAPI.addToQueue(songs.map((song) => ({ uri: song.uri })));
+    print(songs.length === 1 ? `queued ${songs[0].name}` : `queued ${songs.length} songs`, "ok");
+  };
+
+  // A numbered list. "add" and "play" pick from the last one by number, and
+  // a click on a row queues that song. In a set, rows are graded against the
+  // song before them, like up next.
+  let results = [];
+  const printSongs = (songs, before) => {
+    results = songs;
+    songs.forEach((song, i) => {
+      const row = el("button", "tty-console-song");
+      row.type = "button";
+      row.title = "Add to the queue";
+      const facts = songFacts(song.uri);
+      if (before !== undefined) {
+        const grade = transition(i ? songFacts(songs[i - 1].uri) : before, facts).grade;
+        if (grade) row.classList.add(`is-${grade}`);
+      }
+      row.append(el("span", "tty-console-num", String(i + 1).padStart(2, " ")), el("span", "tty-console-name", song.name), el("span", "tty-console-artist", song.artists));
+      if (facts) row.append(mixLabel(facts));
+      row.addEventListener("click", () => {
+        queueSongs([song]);
+        consoleInput.focus();
+      });
+      consoleOut.append(row);
+    });
+    consoleOut.scrollTop = consoleOut.scrollHeight;
+  };
+
+  // "1 3 5", "2-6" or "all", as songs from the last list.
+  const pick = (args) => {
+    const picked = [];
+    for (const arg of args) {
+      const range = /^(\d+)(?:-(\d+))?$/.exec(arg);
+      if (arg.toLowerCase() === "all") picked.push(...results);
+      else if (range) for (let n = Number(range[1]); n <= Number(range[2] ?? range[1]); n += 1) if (results[n - 1]) picked.push(results[n - 1]);
+    }
+    return [...new Set(picked)];
+  };
+
+  // Liked Songs, with a note while their tempos and keys are still arriving.
+  const likedSongs = async () => {
+    const songs = await loadLibrary();
+    const ready = songs.filter((song) => songFacts(song.uri)).length;
+    if (ready < songs.length * 0.95) print(`still indexing Liked Songs: ${ready} of ${songs.length} ready. Results are partial for the next minute.`, "dim");
+    return songs;
+  };
+
+  // How far apart two tempos are, with half and double time folded together.
+  const tempoApart = (a, b) => {
+    const octaves = Math.abs(Math.log2(b / a)) % 1;
+    return 2 ** Math.min(octaves, 1 - octaves) - 1;
+  };
+
+  // ---- Sets ----
+  // A set is a run of Liked Songs for a given length whose tempo follows a
+  // shape, each song chosen to mix with the one before it. The shape is a
+  // tempo curve relative to where the set starts: the playing song, or a
+  // random liked song when nothing is playing. A little chance in the choice
+  // means the same command gives a different set each time.
+  const SHAPES = {
+    flat: () => 1,
+    up: (x) => 1 + 0.12 * x,
+    down: (x) => 1 - 0.1 * x,
+    peak: (x) => (x < 0.7 ? 1 + 0.1 * (x / 0.7) : 1.1 - 0.07 * ((x - 0.7) / 0.3)), // Up 10% by the 70% mark, then easing off.
+  };
+
+  const buildSet = (songs, minutes, shape, start) => {
+    const pool = songs.filter((song) => {
+      const facts = songFacts(song.uri);
+      return facts?.[0] && facts[1] && song.ms > 90000 && song.ms < 540000 && song.uri !== start?.uri;
+    });
+    if (pool.length < 20) return null;
+    const length = minutes * 60000;
+    const set = [];
+    const used = new Set();
+    let elapsed = 0;
+    let last = start?.facts;
+    if (!last) {
+      const seed = pool[Math.floor(Math.random() * pool.length)];
+      set.push(seed);
+      used.add(seed.uri);
+      elapsed = seed.ms;
+      last = songFacts(seed.uri);
+    }
+    const base = last[0];
+    while (elapsed < length) {
+      const target = base * SHAPES[shape](elapsed / length);
+      const recent = set.slice(-3).map((song) => song.artists);
+      // Two songs running in one key is enough; a third costs extra, so the set moves round the wheel.
+      const stuck = set.length > 1 && songFacts(set.at(-2).uri)[1] === last[1] ? last[1] : "";
+      let best = null;
+      let bestScore = Infinity;
+      for (const song of pool) {
+        if (used.has(song.uri)) continue;
+        const facts = songFacts(song.uri);
+        const score = transition(last, facts).cost + tempoApart(target, facts[0]) / 0.03 + (recent.includes(song.artists) ? 2 : 0) + (facts[1] === stuck ? 0.8 : 0) + Math.random() * 0.4;
+        if (score < bestScore) {
+          best = song;
+          bestScore = score;
+        }
+      }
+      if (!best || (set.length && elapsed + best.ms / 2 > length)) break; // Stop rather than run more than half a song over.
+      set.push(best);
+      used.add(best.uri);
+      elapsed += best.ms;
+      last = songFacts(best.uri);
+    }
+    return { songs: set, ms: elapsed, base };
+  };
+
+  // The set's tempo as a row of bars, lowest to highest.
+  const tempoChart = (set) => {
+    const ratios = set.songs.map((song) => {
+      const octaves = Math.log2(songFacts(song.uri)[0] / set.base);
+      return 2 ** (octaves - Math.round(octaves));
+    });
+    const low = Math.min(0.94, ...ratios);
+    const high = Math.max(1.12, ...ratios);
+    return ratios.map((ratio) => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor(((ratio - low) / (high - low)) * 8))]).join("");
+  };
+
+  let lastSet = null;
+
+  const commands = {
+    help() {
+      for (const [command, does] of [
+        ["find 124bpm 8A", "liked songs near a tempo, in a key"],
+        ["find 120-128bpm", "a tempo range. Add words to match names"],
+        ["mix", "liked songs that mix cleanly with this one"],
+        ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
+        ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
+        ["play 2", "play one from the last list now"],
+        ["smooth", "reorder the next 30 songs. undo puts them back"],
+        ["set 60m peak", "build a set: flat, up, down or peak"],
+        ["save my set", "save the last set as a playlist"],
+        ["now", "this song's tempo and key"],
+        ["clear", "empty this window. Esc closes it"],
+      ]) {
+        const row = print("", "help");
+        row.append(el("span", "tty-console-command", command), el("span", "", does));
+      }
+    },
+
+    now() {
+      const item = state().item;
+      const facts = songFacts(item?.uri);
+      if (!item) print("nothing is playing", "dim");
+      else print(facts ? `${item.name}: ${Math.round(facts[0])} BPM, key ${facts[1]}` : `${item.name}: Spotify has no tempo or key for this one`);
+    },
+
+    async find(args) {
+      let low = 0;
+      let high = 0;
+      let near = 0;
+      let key = "";
+      const words = [];
+      for (const arg of args) {
+        const range = /^(\d{2,3})-(\d{2,3})(?:bpm)?$/i.exec(arg);
+        const tempo = /^(\d{2,3})bpm$/i.exec(arg);
+        const wheel = /^(1[0-2]|[1-9])([ab])$/i.exec(arg);
+        if (range) [low, high] = [Number(range[1]), Number(range[2])];
+        else if (tempo) near = Number(tempo[1]);
+        else if (wheel) key = `${wheel[1]}${wheel[2].toUpperCase()}`;
+        else words.push(arg.toLowerCase());
+      }
+      if (!args.length) {
+        print("find what? Try: find 124bpm 8A, find 120-128bpm, or find a name", "dim");
+        return;
+      }
+      const songs = (await likedSongs()).filter((song) => {
+        const facts = songFacts(song.uri);
+        if ((near || high || key) && !facts) return false;
+        if (near && tempoApart(near, facts[0]) > 0.03) return false;
+        if (high && (facts[0] < low || facts[0] > high)) return false;
+        if (key && facts[1] !== key) return false;
+        const text = `${song.name} ${song.artists}`.toLowerCase();
+        return words.every((word) => text.includes(word));
+      });
+      if (near) songs.sort((a, b) => tempoApart(near, songFacts(a.uri)[0]) - tempoApart(near, songFacts(b.uri)[0]));
+      else if (high) songs.sort((a, b) => songFacts(a.uri)[0] - songFacts(b.uri)[0]);
+      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${songs.length > 20 ? ", first 20:" : ":"}` : "no liked songs match", songs.length ? "" : "dim");
+      printSongs(songs.slice(0, 20));
+    },
+
+    async mix(args) {
+      const item = state().item;
+      const from = songFacts(item?.uri);
+      if (!from) {
+        print(item ? "Spotify has no tempo or key for the playing song" : "nothing is playing", "dim");
+        return;
+      }
+      // "slower" and "faster": keys that fit, 4% to 15% down or up in tempo.
+      const step = { slower: -1, faster: 1 }[args[0]?.toLowerCase()] ?? 0;
+      const shift = (facts) => {
+        const octaves = Math.log2(facts[0] / from[0]);
+        return 2 ** (octaves - Math.round(octaves)) - 1;
+      };
+      const queued = new Set(upcoming().map((next) => next.uri));
+      const songs = (await likedSongs())
+        .filter((song) => song.uri !== item.uri && !queued.has(song.uri) && songFacts(song.uri)?.[0])
+        .map((song) => ({ song, fit: transition(from, songFacts(song.uri)), shift: shift(songFacts(song.uri)) }))
+        .filter((entry) => (step ? entry.fit.keyFits && entry.shift * step >= 0.04 && entry.shift * step <= 0.15 : entry.fit.grade === "clean"))
+        .sort((a, b) => (step ? Math.abs(a.shift) - Math.abs(b.shift) : a.fit.cost - b.fit.cost))
+        .map((entry) => entry.song);
+      const what = step ? `fit ${item.name}'s key, a step ${args[0].toLowerCase()}` : `mix cleanly with ${item.name}`;
+      print(songs.length ? `${songs.length} liked songs ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs ${what}`, songs.length ? "" : "dim");
+      printSongs(songs.slice(0, 20));
+    },
+
+    async add(args) {
+      const songs = pick(args);
+      if (!songs.length) print(results.length ? "add which? Try: add 1 3, add 2-6 or add all" : "nothing to add yet. Run find, mix or set first", "dim");
+      else await queueSongs(songs);
+    },
+
+    async play(args) {
+      const [song] = pick(args);
+      if (!song) {
+        print(results.length ? "play which? Try: play 1" : "nothing to play yet. Run find, mix or set first", "dim");
+        return;
+      }
+      await S.Platform.PlayerAPI.addToQueue([{ uri: song.uri }]);
+      for (let tries = 0; tries < 30; tries += 1) {
+        const queued = upcoming().find((next) => next.provider === "queue" && next.uri === song.uri);
+        if (queued) {
+          await S.Platform.PlayerAPI.skipTo({ uid: queued.uid, uri: queued.uri });
+          print(`playing ${song.name}`, "ok");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      print(`queued ${song.name}, but couldn't jump to it`, "warn");
+    },
+
+    async smooth() {
+      smoothUndo = null; // Smooth again from wherever the queue is now.
+      smoothNote = null;
+      await smooth();
+      const result = smoothNote?.text ?? "";
+      if (result === "already smooth") print("the next 30 songs are already as smooth as they get", "ok");
+      else if (smoothUndo) print(`next 30 songs reordered: ${result}. undo puts them back`, "ok");
+      else print("couldn't reorder the queue", "warn");
+    },
+
+    async undo() {
+      if (!smoothUndo) {
+        print("nothing to undo", "dim");
+        return;
+      }
+      smoothNote = null;
+      await smooth();
+      print("queue put back", "ok");
+    },
+
+    async set(args) {
+      const minutes = Math.min(240, Math.max(10, Number((/^(\d{1,3})m?$/i.exec(args.find((arg) => /^\d/.test(arg)) ?? "") ?? [])[1] ?? 60)));
+      const shape = args.map((arg) => arg.toLowerCase()).find((arg) => SHAPES[arg]) ?? "peak";
+      const item = state().item;
+      const start = songFacts(item?.uri) ? { uri: item.uri, facts: songFacts(item.uri) } : null;
+      const set = buildSet(await likedSongs(), minutes, shape, start);
+      if (!set) {
+        print("not enough liked songs with a tempo and key to build from", "dim");
+        return;
+      }
+      const clean = set.songs.reduce((count, song, i) => count + (transition(i ? songFacts(set.songs[i - 1].uri) : start?.facts, songFacts(song.uri)).grade === "clean" ? 1 : 0), 0);
+      // Tempos for the summary, with half and double time folded onto the set's middle tempo.
+      const raw = set.songs.map((song) => songFacts(song.uri)[0]);
+      const middle = [...raw].sort((a, b) => a - b)[Math.floor(raw.length / 2)];
+      const tempos = raw.map((bpm) => Math.round(bpm / 2 ** Math.round(Math.log2(bpm / middle))));
+      lastSet = { songs: set.songs, name: `Set: ${minutes} min ${shape}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}` };
+      print(`${set.songs.length} songs, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
+      print(`tempo ${tempoChart(set)}  ${tempos[0]} to ${tempos.at(-1)} BPM, top ${Math.max(...tempos)}`, "chart");
+      printSongs(set.songs, start?.facts);
+      print("save keeps it as a playlist. add all queues it. Run set again for a different one", "dim");
+    },
+
+    async save(args, line) {
+      if (!lastSet) {
+        print("nothing to save yet. Build one first: set 60m peak", "dim");
+        return;
+      }
+      const name = line.replace(/^\s*save\s*/i, "").trim() || lastSet.name;
+      const uri = await S.Platform.RootlistAPI.createPlaylist(name, { before: "start" });
+      if (!uri) {
+        print("couldn't create the playlist", "warn");
+        return;
+      }
+      await S.Platform.PlaylistAPI.add(uri, lastSet.songs.map((song) => song.uri), { after: "end" });
+      const row = print(`saved ${lastSet.songs.length} songs as "${name}" `, "ok");
+      const open = el("button", "tty-console-link", "open");
+      open.type = "button";
+      open.addEventListener("click", () => {
+        S.Platform.History.push(`/playlist/${uri.split(":").pop()}`);
+        closeConsole();
+      });
+      row.append(open);
+    },
+
+    clear() {
+      consoleOut.replaceChildren();
+    },
+  };
+
+  const HISTORY_KEY = "tty-console-history";
+  let history = [];
+  try {
+    history = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+  } catch {}
+  let historyAt = -1; // -1: a new line; 0: the last command; and so on back.
+  let consoleBusy = false;
+
+  const runCommand = async (text) => {
+    const line = text.trim();
+    if (!line || consoleBusy) return;
+    print(`$ ${line}`, "echo");
+    history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
+    historyAt = -1;
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    } catch {}
+    const args = line.split(/\s+/);
+    let name = args.shift().toLowerCase();
+    // "queue smooth" and "queue undo" read naturally; "queue 1 3" means add.
+    if (name === "queue") name = ["smooth", "undo"].includes(args[0]?.toLowerCase()) ? args.shift().toLowerCase() : "add";
+    consoleBusy = true;
+    consoleBox.classList.add("is-busy");
+    try {
+      if (Object.hasOwn(commands, name)) await commands[name](args, line);
+      else print(`no command called "${name}". help lists them`, "dim");
+    } catch {
+      print("that didn't work", "warn");
+    }
+    consoleBusy = false;
+    consoleBox.classList.remove("is-busy");
+  };
+
+  const placeConsole = () => {
+    if (consoleBox.hidden) return;
+    const at = prompt.getBoundingClientRect();
+    const left = at.width ? Math.max(8, at.left - 12) : 230;
+    consoleBox.style.left = `${left}px`;
+    consoleBox.style.width = `${Math.max(320, Math.min(720, window.innerWidth - left - 24))}px`;
+    consolePrompt.textContent = `${userName}@spotify:~$`;
+  };
+
+  const openConsole = () => {
+    consoleBox.hidden = false;
+    root.classList.add("tty-console-open");
+    placeConsole();
+    if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them. Esc closes this.", "dim");
+    consoleInput.focus();
+  };
+
+  const closeConsole = () => {
+    consoleBox.hidden = true;
+    root.classList.remove("tty-console-open");
+    consoleInput.blur();
+  };
+
+  prompt.removeAttribute("aria-hidden");
+  prompt.setAttribute("role", "button");
+  prompt.title = "Open the console (`)";
+  prompt.addEventListener("click", () => (consoleBox.hidden ? openConsole() : closeConsole()));
+
+  consoleInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      const text = consoleInput.value;
+      consoleInput.value = "";
+      runCommand(text);
+    } else if (event.key === "Escape") {
+      closeConsole();
+    } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+      historyAt = Math.max(-1, Math.min(history.length - 1, historyAt + (event.key === "ArrowUp" ? 1 : -1)));
+      consoleInput.value = historyAt < 0 ? "" : history[historyAt];
+      event.preventDefault();
+    } else {
+      return;
+    }
+    event.stopPropagation();
+  });
+
+  // Backtick opens the console from anywhere but a text field.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "`" || event.metaKey || event.ctrlKey || event.altKey || ownsKeys(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openConsole();
+    },
+    true,
+  );
 
   // ---- Song info: lyrics and the auto level ---------------------------------------
   //
@@ -2850,6 +3296,7 @@
     placeSwitches();
     placeQueue();
     renderQueue();
+    placeConsole();
     refreshSpotifyButtons();
     if (!volumeBar.matches(":active")) showVolume();
   };

@@ -20,6 +20,8 @@ Developed by [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagra
 - **Lyrics** scroll one line at a time along the top border.
 - **Up next:** the queue sits on the right. Click a song to play it. Each song shows its BPM and its key on the Camelot wheel, and the numbers light up when a song mixes cleanly with the one before it.
 - **Smooth:** one click on the pane's border reorders the next 30 songs so tempos and keys run into each other. It works on any queue: an album, someone else's playlist, radio. Click again to undo.
+- **A working console:** click the prompt in the top bar, or press the backtick key, and type. `find 124bpm 8A` searches your Liked Songs by tempo and key. `mix` lists the ones that mix cleanly with the playing song. `add 1 3 5` queues them. `help` lists every command.
+- **Sets:** `set 60m peak` builds an hour of Liked Songs that starts from the playing song, follows a tempo shape (flat, up, down or peak) and mixes cleanly from song to song. `save` keeps it as a playlist, which Spotify's own Mix and DJ apps can then use.
 - **Listening stats** on Home: session, today and this month, plus top songs and artists.
 - **Two looks:** the terminal look (monospace, green borders, green halftone artwork) or Spotify's own look, keeping the layout and the games.
 - **Two views:** the tall games view, or a compact player bar with no games.
@@ -78,6 +80,7 @@ Spicetify is still how the theme loads into the app. You still need it installed
 - **When the beat data is missing:** beat sync and lyrics come from Spotify's own client endpoints. Songs without analysis, and podcasts or local files, play the games without beat sync.
 - **How stats are counted:** the theme keeps the stats itself, in local storage, from the day you install it. A play counts after 30 seconds of listening. Only listening in this Spotify app is counted.
 - **What counts as a clean mix:** tempos within 6% of each other, with half and double time counting as the same tempo, and keys that are the same, one step apart on the Camelot wheel, or major/minor twins. Smooth leaves songs you queued yourself ahead of the rest, the way Spotify plays them.
+- **What sets can't see:** a set is chosen by tempo and key alone, from your Liked Songs. It doesn't know genre or how loud a song is, so it can put very different songs side by side. Run `set` again for a different draw.
 - **Where BPM and key come from:** Spotify's own numbers, the ones behind its Mix feature. The theme asks for them in batches and keeps them in local storage, so each song is asked about once. It also indexes your Liked Songs in the background, about a minute for 6,000 songs.
 - **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS.
 - **After a Spotify update:** Spotify updates wipe Spicetify's changes. On macOS, [self-repair](#self-repair-on-macos) puts the theme back for you. By hand: run `spicetify upgrade`, then `spicetify backup apply`. New Spotify versions often need the newer Spicetify. If the theme is showing and you only want to refresh it, `spicetify apply` is enough.
