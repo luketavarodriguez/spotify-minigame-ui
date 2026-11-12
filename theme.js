@@ -8,7 +8,7 @@
 (function terminal() {
   const S = window.Spicetify;
   const player = S?.Platform?.PlayerAPI;
-  if (!player?._state || !S.Platform.History || !document.querySelector(":is(div:has(> #main-view))")) {
+  if (!player?._state || !S.Platform.History || !document.getElementById("main-view") || !document.querySelector("[data-testid=now-playing-bar]")) {
     setTimeout(terminal, 300);
     return;
   }
@@ -22,6 +22,57 @@
     if (text) node.textContent = text;
     return node;
   };
+
+  // ---- Layout labels -------------------------------------------------------------
+  //
+  // Spotify labels the parts of its app (data-testid, element IDs) but not the
+  // boxes around them, which the layout needs: the player bar's three columns,
+  // the row under the timeline, and so on. The styles could find those boxes
+  // themselves with CSS :has(), but Chrome re-checks :has() on every change
+  // anywhere inside, which made the whole app sluggish. So the script finds
+  // them a few times a second from Spotify's labels and tags them with ours.
+
+  const labels = new Map();
+  const label = (name, el) => {
+    const old = labels.get(name);
+    if (old === el && (!el || el.classList.contains(name))) return;
+    if (old && old !== el) old.classList.remove(name);
+    el?.classList.add(name);
+    labels.set(name, el ?? null);
+  };
+  const labelAll = (name, els) => {
+    for (const el of els) if (!el.classList.contains(name)) el.classList.add(name);
+  };
+  const childHolding = (parent, el) => {
+    while (el && el.parentElement !== parent) el = el.parentElement;
+    return el;
+  };
+
+  const labelLayout = () => {
+    const app = document.getElementById("main-view")?.parentElement;
+    label("tty-app", app);
+    const bar = document.querySelector("[data-testid=now-playing-bar]");
+    label("tty-player", bar?.parentElement);
+    const controls = bar?.querySelector("[data-testid=player-controls]");
+    const row = childHolding(bar, controls);
+    label("tty-row", row);
+    const columns = row ? [...row.children] : [];
+    const center = columns.find((col) => col.contains(controls));
+    const left = columns.find((col) => col !== center && col.querySelector("[data-testid=now-playing-widget], [data-testid=now-playing-widget-v2]"));
+    const right = columns.find((col) => col !== center && col !== left);
+    label("tty-left", left);
+    label("tty-center", center);
+    label("tty-right", right);
+    label("tty-extra", right && [...right.children].find((child) => !child.classList.contains("tty-queue")));
+    label("tty-playback", bar?.querySelector("[data-testid=playback-position]")?.parentElement);
+    label("tty-home", document.querySelector("#global-nav-bar form[role=search]")?.parentElement?.previousElementSibling);
+    const panel = document.getElementById("Desktop_PanelContainer_Id");
+    label("tty-sidebar-peek", app && childHolding(app, panel) && [...childHolding(app, panel).children].find((child) => child.contains(panel)));
+    labelAll("tty-topbar-bg", document.querySelectorAll("[data-testid=topbar] > :not(:has([data-testid=topbar-content-wrapper]))"));
+    labelAll("tty-entity-bg", [...document.querySelectorAll("[data-testid=entity-header] > *")].filter((child) => !child.querySelector("h1")));
+  };
+  labelLayout();
+  setInterval(labelLayout, 250);
 
   const state = () => player._state ?? {};
 
@@ -255,7 +306,7 @@
     return null;
   };
   const buildSprites = () => {
-      const css = getComputedStyle(document.querySelector(":is(div:has(> [data-testid=now-playing-bar]))") ?? root);
+      const css = getComputedStyle(document.querySelector(".tty-player") ?? root);
       const rgb = (name, fallback) => (css.getPropertyValue(name).trim() || fallback).split(",").map(Number);
       const text = rgb("--spice-rgb-text", "212,212,212");
       const accent = rgb("--spice-rgb-button", "95,215,95");
@@ -1262,7 +1313,7 @@
   };
 
   const placeQueue = () => {
-    const right = document.querySelector(":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]))");
+    const right = document.querySelector(".tty-right");
     if (right && queueBox.parentElement !== right) right.prepend(queueBox);
   };
 
@@ -1752,7 +1803,7 @@
   const frame = (now) => {
     requestAnimationFrame(frame);
     const pane = document.querySelector(":is([data-testid=now-playing-bar])");
-    const bar = document.querySelector(":is(div:has(> [data-testid=playback-position])) :is([data-testid=playback-progressbar])");
+    const bar = document.querySelector("[data-testid=now-playing-bar] [data-testid=playback-progressbar]");
     if (!pane || !bar || !sheets || !birdSprites || !shooterSprites || !ctx) return;
     if (game.view === "compact") return;
     if (canvas.parentElement !== pane) pane.prepend(canvas);
@@ -2113,7 +2164,7 @@
 
   const SPOTIFY_BUTTONS = [
     ["queue", "queue", "q", "Queue", '[data-testid="control-button-queue"]'],
-    ["devices", "devices", "dev", "Connect to a device", ":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]) > div:not(.tty-queue)) button:not([data-testid])"],
+    ["devices", "devices", "dev", "Connect to a device", ".tty-extra button:not([data-testid])"],
     ["mini", "mini", "mini", "Miniplayer", '[data-testid="pip-toggle-button"]'],
     ["full", "full", "full", "Full screen", '[data-testid="fullscreen-mode-button"]'],
   ];
@@ -2228,7 +2279,7 @@
     // Both side panes get one width: the narrower side's, less a gap from
     // the song controls, at most 560px. Spotify's two side columns differ by
     // a few pixels, and matching panes is the point.
-    const sides = [":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has(:is([data-testid=now-playing-widget], [data-testid=now-playing-widget-v2])))", ":is([data-testid=now-playing-bar] > div:has([data-testid=player-controls]) > div:has([data-testid=volume-bar], [data-testid=control-button-queue], [data-testid=fullscreen-mode-button]))"].map((q) => document.querySelector(q));
+    const sides = [".tty-left", ".tty-right"].map((q) => document.querySelector(q));
     if (sides.every(Boolean)) {
       const inner = (node) => {
         const cs = getComputedStyle(node);
