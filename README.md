@@ -102,7 +102,7 @@ sh ollama-allow.sh apply
 
 That lasts until you log out. `sh ollama-allow.sh install` repeats it at every login, and `sh ollama-allow.sh remove` undoes it. On other systems, set `OLLAMA_ORIGINS` to `https://xpui.app.spotify.com` and restart Ollama.
 
-How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It doesn't know your library, so it can't search by genre or mood. Answers take a second or two once the model is loaded. If another program is using Ollama, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. `model` shows which model answers, and `model <name>` switches.
+How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It doesn't know your library, so it can't search by genre or mood. Answers take a second or two once the model is loaded. If another program is keeping Ollama busy, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. To stop the waiting, `sh ollama-console.sh install` runs a second Ollama that only the console uses (macOS, about 6 GB of memory while its model is loaded). `model` shows which model answers, and `model <name>` switches.
 
 ## Self-repair on macOS
 

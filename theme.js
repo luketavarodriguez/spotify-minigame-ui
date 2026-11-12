@@ -2053,7 +2053,7 @@
         localStorage.setItem(MODEL_KEY, args[0]);
       }
       const current = await chosenModel();
-      print(models.length ? `plain words go to ${current}. Installed: ${models.join(", ")}. Switch with: model <name>` : "Ollama is running but has no models. Run: ollama pull qwen3:8b");
+      print(models.length ? `plain words go to ${current}${ollama?.endsWith("11435") ? " on the console's own Ollama" : ""}. Installed: ${models.join(", ")}. Switch with: model <name>` : "Ollama is running but has no models. Run: ollama pull qwen3:8b");
     },
 
     clear() {
@@ -2077,7 +2077,11 @@
   // list above, which then run like typed ones. It needs one setting,
   // because Ollama refuses pages it hasn't been told about: OLLAMA_ORIGINS
   // must include this page's address.
-  const OLLAMA = "http://localhost:11434";
+  // Ollama answers one request at a time, so if another program keeps it busy
+  // the console waits in line. A second Ollama on port 11435, kept for the
+  // console (ollama-console.sh), is tried first; the usual one is the fallback.
+  const OLLAMA_PORTS = [11435, 11434];
+  let ollama = null; // The address that answered last.
   const MODEL_KEY = "tty-console-model";
   const MODEL_GUIDE = [
     "You turn a request about music into commands for a console inside Spotify. Answer with JSON only.",
@@ -2105,7 +2109,18 @@
   const MODEL_REPLY = { type: "object", properties: { say: { type: "string" }, commands: { type: "array", items: { type: "string" } } }, required: ["say", "commands"] };
 
   let asking = null; // The request in flight, so Ctrl+C or a minute's wait can drop it.
-  const installedModels = async () => ((await (await fetch(`${OLLAMA}/api/tags`)).json()).models ?? []).map((model) => model.name);
+  const installedModels = async () => {
+    for (const port of OLLAMA_PORTS) {
+      try {
+        const res = await fetch(`http://localhost:${port}/api/tags`, { signal: AbortSignal.timeout(3000) });
+        if (!res.ok) continue;
+        ollama = `http://localhost:${port}`;
+        return ((await res.json()).models ?? []).map((model) => model.name);
+      } catch {}
+    }
+    ollama = null;
+    throw new Error("no Ollama");
+  };
   const chosenModel = async () => {
     const models = await installedModels();
     const saved = localStorage.getItem(MODEL_KEY);
@@ -2140,11 +2155,11 @@
     const signal = asking.signal;
     const timer = setTimeout(() => asking?.abort("slow"), 60000);
     try {
-      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0 }, messages: [{ role: "system", content: MODEL_GUIDE }, { role: "user", content: `Playing now: ${playing}.\nRequest: ${line}` }] };
-      let res = await fetch(`${OLLAMA}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, { role: "user", content: `Playing now: ${playing}.\nRequest: ${line}` }] };
+      let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         delete body.think; // Models that don't reason step by step reject the switch.
-        res = await fetch(`${OLLAMA}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+        res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       }
       reply = JSON.parse((await res.json()).message.content);
     } catch {}
