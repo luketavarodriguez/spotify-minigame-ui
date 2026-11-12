@@ -22,6 +22,7 @@ Developed by [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagra
 - **Smooth:** one click on the pane's border reorders the next 30 songs so tempos and keys run into each other. It works on any queue: an album, someone else's playlist, radio. Click again to undo.
 - **A working console:** click the prompt in the top bar, or press the backtick key, and type. `find 124bpm 8A` searches your Liked Songs by tempo and key. `mix` lists the ones that mix cleanly with the playing song. `add 1 3 5` queues them. `help` lists every command.
 - **Sets:** `set 60m peak` builds an hour of Liked Songs that starts from the playing song, follows a tempo shape (flat, up, down or peak) and mixes cleanly from song to song. `save` keeps it as a playlist, which Spotify's own Mix and DJ apps can then use.
+- **Plain words, with a model on your own computer:** type a sentence in the console, such as `something like this but slower` or `queue 3 songs that mix with this`, and a local model picks the commands. This part is optional and needs [Ollama](https://ollama.com). Nothing you type leaves your computer.
 - **Listening stats** on Home: session, today and this month, plus top songs and artists.
 - **Two looks:** the terminal look (monospace, green borders, green halftone artwork) or Spotify's own look, keeping the layout and the games.
 - **Two views:** the tall games view, or a compact player bar with no games.
@@ -84,6 +85,24 @@ Spicetify is still how the theme loads into the app. You still need it installed
 - **Where BPM and key come from:** Spotify's own numbers, the ones behind its Mix feature. The theme asks for them in batches and keeps them in local storage, so each song is asked about once. It also indexes your Liked Songs in the background, about a minute for 6,000 songs.
 - **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS.
 - **After a Spotify update:** Spotify updates wipe Spicetify's changes. On macOS, [self-repair](#self-repair-on-macos) puts the theme back for you. By hand: run `spicetify upgrade`, then `spicetify backup apply`. New Spotify versions often need the newer Spicetify. If the theme is showing and you only want to refresh it, `spicetify apply` is enough.
+
+## Plain words in the console
+
+The console's commands work on their own. To also type sentences, install [Ollama](https://ollama.com), which runs language models on your computer, and a model:
+
+```bash
+ollama pull qwen3:8b
+```
+
+Ollama refuses requests from pages it hasn't been told about, and Spotify's interface is one. On macOS, allow it from the theme's folder:
+
+```bash
+sh ollama-allow.sh apply
+```
+
+That lasts until you log out. `sh ollama-allow.sh install` repeats it at every login, and `sh ollama-allow.sh remove` undoes it. On other systems, set `OLLAMA_ORIGINS` to `https://xpui.app.spotify.com` and restart Ollama.
+
+How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It doesn't know your library, so it can't search by genre or mood. Answers take a second or two once the model is loaded. If another program is using Ollama, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. `model` shows which model answers, and `model <name>` switches.
 
 ## Self-repair on macOS
 

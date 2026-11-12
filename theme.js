@@ -1852,6 +1852,11 @@
 
   let lastSet = null;
 
+  // A command returns ASK when what followed it reads like a sentence, not
+  // like its own arguments: "find me something mellow", "queue three songs
+  // that mix with this". The line then goes to the model instead.
+  const ASK = Symbol("ask");
+
   const commands = {
     help() {
       for (const [command, does] of [
@@ -1866,6 +1871,8 @@
         ["save my set", "save the last set as a playlist"],
         ["now", "this song's tempo and key"],
         ["clear", "empty this window. Esc closes it"],
+        ["plain words", "anything else goes to a model on this computer, which picks the commands. Try: something like this but slower"],
+        ["model", "which model answers plain words"],
       ]) {
         const row = print("", "help");
         row.append(el("span", "tty-console-command", command), el("span", "", does));
@@ -1909,6 +1916,7 @@
       });
       if (near) songs.sort((a, b) => tempoApart(near, songFacts(a.uri)[0]) - tempoApart(near, songFacts(b.uri)[0]));
       else if (high) songs.sort((a, b) => songFacts(a.uri)[0] - songFacts(b.uri)[0]);
+      if (!songs.length && words.length > 1) return ASK;
       print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${songs.length > 20 ? ", first 20:" : ":"}` : "no liked songs match", songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
     },
@@ -1922,6 +1930,7 @@
       }
       // "slower" and "faster": keys that fit, 4% to 15% down or up in tempo.
       const step = { slower: -1, faster: 1 }[args[0]?.toLowerCase()] ?? 0;
+      if (args.length > (step ? 1 : 0)) return ASK;
       const shift = (facts) => {
         const octaves = Math.log2(facts[0] / from[0]);
         return 2 ** (octaves - Math.round(octaves)) - 1;
@@ -1939,12 +1948,14 @@
     },
 
     async add(args) {
+      if (args.some((arg) => !/^(\d+(-\d+)?|all)$/i.test(arg))) return ASK;
       const songs = pick(args);
       if (!songs.length) print(results.length ? "add which? Try: add 1 3, add 2-6 or add all" : "nothing to add yet. Run find, mix or set first", "dim");
       else await queueSongs(songs);
     },
 
     async play(args) {
+      if (args.some((arg) => !/^\d+$/.test(arg))) return ASK;
       const [song] = pick(args);
       if (!song) {
         print(results.length ? "play which? Try: play 1" : "nothing to play yet. Run find, mix or set first", "dim");
@@ -1984,6 +1995,7 @@
     },
 
     async set(args) {
+      if (args.some((arg) => !/^\d{1,3}m?$/i.test(arg) && !SHAPES[arg.toLowerCase()])) return ASK;
       const minutes = Math.min(240, Math.max(10, Number((/^(\d{1,3})m?$/i.exec(args.find((arg) => /^\d/.test(arg)) ?? "") ?? [])[1] ?? 60)));
       const shape = args.map((arg) => arg.toLowerCase()).find((arg) => SHAPES[arg]) ?? "peak";
       const item = state().item;
@@ -2027,6 +2039,23 @@
       row.append(open);
     },
 
+    async model(args) {
+      let models;
+      try {
+        models = await installedModels();
+      } catch {
+        modelHelp();
+        return;
+      }
+      if (args[0] && !models.includes(args[0])) {
+        print(`Ollama has no model called "${args[0]}"`, "dim");
+      } else if (args[0]) {
+        localStorage.setItem(MODEL_KEY, args[0]);
+      }
+      const current = await chosenModel();
+      print(models.length ? `plain words go to ${current}. Installed: ${models.join(", ")}. Switch with: model <name>` : "Ollama is running but has no models. Run: ollama pull qwen3:8b");
+    },
+
     clear() {
       consoleOut.replaceChildren();
     },
@@ -2040,27 +2069,128 @@
   let historyAt = -1; // -1: a new line; 0: the last command; and so on back.
   let consoleBusy = false;
 
+  // ---- Plain words: a model on this computer turns a sentence into commands ----
+  //
+  // Anything that isn't a command goes to Ollama (ollama.com), a program that
+  // runs language models locally. The model never touches Spotify. It reads
+  // the request and the playing song, and answers with commands from the
+  // list above, which then run like typed ones. It needs one setting,
+  // because Ollama refuses pages it hasn't been told about: OLLAMA_ORIGINS
+  // must include this page's address.
+  const OLLAMA = "http://localhost:11434";
+  const MODEL_KEY = "tty-console-model";
+  const MODEL_GUIDE = [
+    "You turn a request about music into commands for a console inside Spotify. Answer with JSON only.",
+    "Commands:",
+    "find <words> <N>bpm <key>   search the user's Liked Songs. All parts are optional. <N>bpm is a tempo, or use a range like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Words match song titles and artist names only, so leave out genre and mood words like house or chill.",
+    "mix   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%.",
+    "mix slower   the same, but 4% to 15% slower. mix faster   4% to 15% faster.",
+    "add <numbers>   queue songs from the last list, for example: add 1 2 3. Or: add all.",
+    "play <number>   play one song from the last list now.",
+    "smooth   reorder the next 30 queued songs so they run into each other. undo   put them back.",
+    "set <minutes>m <shape>   build a set from Liked Songs that starts from the playing song. Shape is flat, up, down or peak.",
+    "save <name>   save the last set as a playlist.",
+    "now   show the playing song's tempo and key.",
+    "Rules: use only these commands, at most 4, in the order they should run. A command that lists songs (find, mix, set) must come before add or play. Never invent song numbers beyond 5 unless the user asks for more. If the request can't be done with these commands, give no commands.",
+    'Put one short plain sentence in "say" telling the user what you are doing, or why you can\'t.',
+    "Examples:",
+    'Request: queue 3 songs that mix with this -> {"say": "Queueing three songs that mix with it.", "commands": ["mix", "add 1 2 3"]}',
+    'Request: something like this but slower -> {"say": "Looking for a slower match.", "commands": ["mix slower"]}',
+    'Request: play some house around 120 bpm -> {"say": "Playing a song near 120 BPM. I can\'t search by genre.", "commands": ["find 120bpm", "play 1"]}',
+    'Request: put on some deftones -> {"say": "Queueing Deftones from your Liked Songs.", "commands": ["find deftones", "add all"]}',
+    'Request: an hour long set that builds, save it as friday -> {"say": "Building a one hour set that climbs.", "commands": ["set 60m up", "save friday"]}',
+    'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
+    'Request: what is the weather -> {"say": "I can only search, queue and build sets here.", "commands": []}',
+  ].join("\n");
+  const MODEL_REPLY = { type: "object", properties: { say: { type: "string" }, commands: { type: "array", items: { type: "string" } } }, required: ["say", "commands"] };
+
+  let asking = null; // The request in flight, so Ctrl+C or a minute's wait can drop it.
+  const installedModels = async () => ((await (await fetch(`${OLLAMA}/api/tags`)).json()).models ?? []).map((model) => model.name);
+  const chosenModel = async () => {
+    const models = await installedModels();
+    const saved = localStorage.getItem(MODEL_KEY);
+    return (saved && models.includes(saved) ? saved : null) ?? models.find((name) => /^qwen/i.test(name)) ?? models[0] ?? null;
+  };
+  const modelHelp = () => {
+    print("That isn't a command, and no model on this computer answered. To use plain words:", "dim");
+    print("  1. install Ollama from ollama.com, then run: ollama pull qwen3:8b", "dim");
+    print(`  2. let Spotify talk to it (macOS): launchctl setenv OLLAMA_ORIGINS "${location.origin}"`, "dim");
+    print("  3. quit and reopen Ollama", "dim");
+    print("help lists the commands that work without it.", "dim");
+  };
+
+  const ask = async (line) => {
+    let model;
+    try {
+      model = await chosenModel();
+    } catch {
+      modelHelp();
+      return;
+    }
+    if (!model) {
+      print("Ollama is running but has no models. Run: ollama pull qwen3:8b", "dim");
+      return;
+    }
+    const item = state().item;
+    const facts = songFacts(item?.uri);
+    const playing = item ? `${item.name} by ${(item.artists ?? []).map((artist) => artist.name).join(", ")}${facts ? `, ${Math.round(facts[0])} BPM, key ${facts[1]}` : ""}` : "nothing";
+    const waiting = print(`asking ${model}... (Ctrl+C stops)`, "dim");
+    let reply = null;
+    asking = new AbortController();
+    const signal = asking.signal;
+    const timer = setTimeout(() => asking?.abort("slow"), 60000);
+    try {
+      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0 }, messages: [{ role: "system", content: MODEL_GUIDE }, { role: "user", content: `Playing now: ${playing}.\nRequest: ${line}` }] };
+      let res = await fetch(`${OLLAMA}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      if (!res.ok) {
+        delete body.think; // Models that don't reason step by step reject the switch.
+        res = await fetch(`${OLLAMA}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      }
+      reply = JSON.parse((await res.json()).message.content);
+    } catch {}
+    clearTimeout(timer);
+    asking = null;
+    waiting.remove();
+    if (!reply) {
+      if (signal.reason === "stop") print("^C", "dim");
+      else if (signal.reason === "slow") print(`${model} took over a minute, so the request was dropped. Another program may be keeping Ollama busy. Commands still work (help)`, "warn");
+      else print(`${model} didn't give a usable answer. Try again, or use a command (help)`, "warn");
+      return;
+    }
+    if (reply.say) print(reply.say);
+    const lines = (Array.isArray(reply.commands) ? reply.commands : []).filter((command) => typeof command === "string" && command.trim()).slice(0, 4);
+    if (!lines.length && !reply.say) print("the model had nothing to run", "dim");
+    for (const command of lines) await runLine(command, true);
+  };
+
+  // One line, typed or from the model. Model lines show with ">" and can't ask the model again.
+  const runLine = async (line, fromModel) => {
+    print(`${fromModel ? ">" : "$"} ${line}`, "echo");
+    const args = line.trim().split(/\s+/);
+    let name = args.shift().toLowerCase();
+    // "queue smooth" and "queue undo" read naturally; "queue 1 3" means add.
+    if (name === "queue") name = ["smooth", "undo"].includes(args[0]?.toLowerCase()) ? args.shift().toLowerCase() : "add";
+    try {
+      const sentence = Object.hasOwn(commands, name) ? (await commands[name](args, line.trim())) === ASK : true;
+      if (!sentence) return;
+      if (fromModel) print("skipped: not a command the console knows", "dim");
+      else await ask(line.trim());
+    } catch {
+      print("that didn't work", "warn");
+    }
+  };
+
   const runCommand = async (text) => {
     const line = text.trim();
     if (!line || consoleBusy) return;
-    print(`$ ${line}`, "echo");
     history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
     historyAt = -1;
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
     } catch {}
-    const args = line.split(/\s+/);
-    let name = args.shift().toLowerCase();
-    // "queue smooth" and "queue undo" read naturally; "queue 1 3" means add.
-    if (name === "queue") name = ["smooth", "undo"].includes(args[0]?.toLowerCase()) ? args.shift().toLowerCase() : "add";
     consoleBusy = true;
     consoleBox.classList.add("is-busy");
-    try {
-      if (Object.hasOwn(commands, name)) await commands[name](args, line);
-      else print(`no command called "${name}". help lists them`, "dim");
-    } catch {
-      print("that didn't work", "warn");
-    }
+    await runLine(line, false);
     consoleBusy = false;
     consoleBox.classList.remove("is-busy");
   };
@@ -2078,7 +2208,7 @@
     consoleBox.hidden = false;
     root.classList.add("tty-console-open");
     placeConsole();
-    if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them. Esc closes this.", "dim");
+    if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them, or say what you want in plain words. Esc closes this.", "dim");
     consoleInput.focus();
   };
 
@@ -2098,6 +2228,8 @@
       const text = consoleInput.value;
       consoleInput.value = "";
       runCommand(text);
+    } else if (event.key === "c" && event.ctrlKey && asking) {
+      asking.abort("stop");
     } else if (event.key === "Escape") {
       closeConsole();
     } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
