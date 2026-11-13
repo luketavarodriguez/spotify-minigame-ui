@@ -1499,7 +1499,33 @@
   smoothButton.type = "button";
   const queueNow = el("span", "tty-queue-now");
   queueBar.append(smoothButton, queueNow);
-  queueBox.append(queueBar, queueList);
+  // Drag up next's inner edge to set the width of both side panes (they always match).
+  const SIDE_KEY = "tty-side-width";
+  let sideCap = Number(localStorage.getItem(SIDE_KEY)) || 560;
+  const queueGrip = el("div", "tty-queue-grip");
+  queueGrip.title = "Drag to resize the side panes";
+  queueGrip.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    try {
+      queueGrip.setPointerCapture(event.pointerId);
+    } catch {}
+    root.classList.add("tty-resizing");
+    const move = (at) => {
+      sideCap = Math.round(Math.max(200, Math.min(560, queueBox.getBoundingClientRect().right - at.clientX)));
+      placeSwitches();
+    };
+    const done = () => {
+      queueGrip.removeEventListener("pointermove", move);
+      root.classList.remove("tty-resizing");
+      try {
+        localStorage.setItem(SIDE_KEY, String(sideCap));
+      } catch {}
+    };
+    queueGrip.addEventListener("pointermove", move);
+    queueGrip.addEventListener("pointerup", done, { once: true });
+    queueGrip.addEventListener("pointercancel", done, { once: true });
+  });
+  queueBox.append(queueGrip, queueBar, queueList);
   let queueSignature = null;
 
   // "175  3A": tempo in beats per minute, then the key's place on the Camelot
@@ -1770,8 +1796,22 @@
   consoleInput.autocomplete = "off";
   consoleInput.setAttribute("aria-label", "Command");
   consoleLine.append(consolePrompt, consoleInput);
-  consoleBox.append(consoleOut, consoleLine);
-  document.body.append(consoleBox);
+  // The console is a pane in Spotify's own layout, sharing the main view's
+  // cell: docked under it or beside it. Drag its title to move it, the edge
+  // facing the main view to resize it.
+  const consoleGrip = el("div", "tty-console-grip");
+  const consoleBar = el("div", "tty-console-bar");
+  const consoleTitle = el("span", "tty-console-title", "console");
+  const dockButton = el("button", "tty-console-button");
+  const closeButton = el("button", "tty-console-button", "x");
+  dockButton.type = "button";
+  closeButton.type = "button";
+  closeButton.title = "Close the console (Esc)";
+  consoleBar.append(consoleTitle, dockButton, closeButton);
+  consoleBox.append(consoleGrip, consoleBar, consoleOut, consoleLine);
+  const dockHint = el("div", "tty-dock-hint"); // Shows where the pane will land while you drag it.
+  dockHint.hidden = true;
+  document.body.append(dockHint);
 
   const print = (text, kind) => {
     const row = el("div", kind ? `tty-console-row is-${kind}` : "tty-console-row", text);
@@ -2551,28 +2591,130 @@
     consoleBox.classList.remove("is-busy");
   };
 
+  // Where the console sits and how big, remembered between sessions.
+  const DOCK_KEY = "tty-console-dock";
+  const dock = { side: "bottom", bottom: 300, right: 420, open: false };
+  try {
+    Object.assign(dock, JSON.parse(localStorage.getItem(DOCK_KEY) ?? "{}"));
+  } catch {}
+  if (dock.side !== "right") dock.side = "bottom";
+  const saveDock = () => {
+    try {
+      localStorage.setItem(DOCK_KEY, JSON.stringify(dock));
+    } catch {}
+  };
+
+  // The cell the main view and the console share.
+  const dockCell = () => {
+    const main = document.getElementById("main-view")?.getBoundingClientRect();
+    if (!main) return null;
+    const pane = consoleBox.hidden ? main : consoleBox.getBoundingClientRect();
+    const left = Math.min(main.left, pane.left);
+    const top = Math.min(main.top, pane.top);
+    return { left, top, width: Math.max(main.right, pane.right) - left, height: Math.max(main.bottom, pane.bottom) - top };
+  };
+  // Neither pane gets squeezed out: the main view keeps 320 by 180, the console 300 by 120.
+  const dockSize = (cell) => (dock.side === "right" ? Math.max(300, Math.min(dock.right, cell.width - 328)) : Math.max(120, Math.min(dock.bottom, cell.height - 188)));
+
   const placeConsole = () => {
     if (consoleBox.hidden) return;
-    const at = prompt.getBoundingClientRect();
-    const left = at.width ? Math.max(8, at.left - 12) : 230;
-    consoleBox.style.left = `${left}px`;
-    consoleBox.style.width = `${Math.max(320, Math.min(720, window.innerWidth - left - 24))}px`;
+    const app = document.querySelector(".tty-app");
+    if (app && consoleBox.parentElement !== app) app.append(consoleBox);
+    const cell = dockCell();
+    if (cell) root.style.setProperty("--tty-console-size", `${Math.round(dockSize(cell))}px`);
+    root.classList.toggle("tty-console-bottom", dock.side === "bottom");
+    root.classList.toggle("tty-console-right", dock.side === "right");
+    dockButton.textContent = dock.side === "bottom" ? "dock right" : "dock bottom";
+    dockButton.title = dock.side === "bottom" ? "Move the console beside the main view" : "Move the console under the main view";
     consolePrompt.textContent = `${userName}@spotify:~$`;
   };
 
-  const openConsole = () => {
+  const openConsole = (focus = true) => {
     consoleBox.hidden = false;
     root.classList.add("tty-console-open");
+    dock.open = true;
+    saveDock();
     placeConsole();
     if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them, or say what you want in plain words. Esc closes this.", "dim");
-    consoleInput.focus();
+    if (focus) consoleInput.focus();
   };
 
   const closeConsole = () => {
     consoleBox.hidden = true;
-    root.classList.remove("tty-console-open");
+    root.classList.remove("tty-console-open", "tty-console-bottom", "tty-console-right");
+    dock.open = false;
+    saveDock();
     consoleInput.blur();
   };
+
+  closeButton.addEventListener("click", closeConsole);
+  dockButton.addEventListener("click", () => {
+    dock.side = dock.side === "bottom" ? "right" : "bottom";
+    saveDock();
+    placeConsole();
+    consoleInput.focus();
+  });
+
+  // Resize: drag the edge that faces the main view.
+  consoleGrip.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    try {
+      consoleGrip.setPointerCapture(event.pointerId);
+    } catch {}
+    root.classList.add("tty-resizing");
+    const move = (at) => {
+      const cell = dockCell();
+      if (!cell) return;
+      if (dock.side === "right") dock.right = cell.left + cell.width - at.clientX - 4;
+      else dock.bottom = cell.top + cell.height - at.clientY - 4;
+      dock[dock.side] = Math.round(dockSize(cell));
+      placeConsole();
+    };
+    const done = () => {
+      consoleGrip.removeEventListener("pointermove", move);
+      root.classList.remove("tty-resizing");
+      saveDock();
+    };
+    consoleGrip.addEventListener("pointermove", move);
+    consoleGrip.addEventListener("pointerup", done, { once: true });
+    consoleGrip.addEventListener("pointercancel", done, { once: true });
+  });
+
+  // Move: drag the title. The right third of the cell docks it beside the
+  // main view, the lower part under it. An outline shows where it will land.
+  consoleBar.addEventListener("pointerdown", (event) => {
+    if (event.target instanceof Element && event.target.closest("button")) return;
+    event.preventDefault();
+    try {
+      consoleBar.setPointerCapture(event.pointerId);
+    } catch {}
+    const from = { x: event.clientX, y: event.clientY };
+    let target = null;
+    const move = (at) => {
+      if (!target && Math.hypot(at.clientX - from.x, at.clientY - from.y) < 8) return;
+      const cell = dockCell();
+      if (!cell) return;
+      target = at.clientX > cell.left + cell.width * 0.66 ? "right" : at.clientY > cell.top + cell.height * 0.5 ? "bottom" : dock.side;
+      const size = target === "right" ? Math.max(300, Math.min(dock.right, cell.width - 328)) : Math.max(120, Math.min(dock.bottom, cell.height - 188));
+      const box = target === "right" ? [cell.left + cell.width - size, cell.top, size, cell.height] : [cell.left, cell.top + cell.height - size, cell.width, size];
+      Object.assign(dockHint.style, { left: `${box[0]}px`, top: `${box[1]}px`, width: `${box[2]}px`, height: `${box[3]}px` });
+      dockHint.hidden = false;
+      root.classList.add("tty-resizing");
+    };
+    const done = () => {
+      consoleBar.removeEventListener("pointermove", move);
+      dockHint.hidden = true;
+      root.classList.remove("tty-resizing");
+      if (target && target !== dock.side) {
+        dock.side = target;
+        saveDock();
+        placeConsole();
+      }
+    };
+    consoleBar.addEventListener("pointermove", move);
+    consoleBar.addEventListener("pointerup", done, { once: true });
+    consoleBar.addEventListener("pointercancel", done, { once: true });
+  });
 
   prompt.removeAttribute("aria-hidden");
   prompt.setAttribute("role", "button");
@@ -2597,6 +2739,8 @@
     }
     event.stopPropagation();
   });
+
+  if (dock.open) setTimeout(() => openConsole(false), 600); // It was open last time.
 
   // Backtick opens the console from anywhere but a text field.
   window.addEventListener(
@@ -3578,7 +3722,7 @@
         const cs = getComputedStyle(node);
         return node.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       };
-      const width = Math.max(200, Math.min(560, ...sides.map((side) => inner(side) - 24)));
+      const width = Math.max(200, Math.min(sideCap, ...sides.map((side) => inner(side) - 24)));
       if (pane.style.getPropertyValue("--tty-side-width") !== `${width}px`) pane.style.setProperty("--tty-side-width", `${width}px`);
     }
   };

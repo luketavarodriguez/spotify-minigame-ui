@@ -857,17 +857,16 @@ html.tty-console-open .tty-prompt .tty-cursor {
    A pane that drops from the prompt: output above, the command line below. */
 
 .tty-console {
-  position: fixed;
-  top: 60px;
-  left: 230px;
-  z-index: 50;
+  position: relative;
+  grid-area: main-view;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  max-height: min(60vh, 560px);
-  padding: 14px 12px 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 22px 12px 10px;
   background: var(--spice-main);
-  box-shadow: inset 0 0 0 1px var(--tty-line), 0 12px 32px rgba(0, 0, 0, 0.6);
   font-family: var(--tty-font);
   font-size: 13px;
   line-height: 20px;
@@ -878,16 +877,140 @@ html.tty-console-open .tty-prompt .tty-cursor {
   display: none;
 }
 
-.tty-console::before {
-  content: "console";
+/* The same border as the other panes: a line that starts under the title. */
+.tty-console::after {
+  content: "";
   position: absolute;
-  top: -1px;
-  left: 8px;
-  padding: 0 4px;
+  inset: 7px 0 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--tty-line);
+}
+
+/* Docked under the main view, or beside it. The two share one cell of
+   Spotify's layout, so the sidebars and the player bar stay where they are. */
+html.tty-console-bottom .tty-console {
+  align-self: end;
+  height: var(--tty-console-size, 300px);
+}
+
+html.tty-console-bottom :is(#main-view) {
+  align-self: start;
+  height: calc(100% - var(--tty-console-size, 300px) - 8px) !important;
+}
+
+html.tty-console-right .tty-console {
+  justify-self: end;
+  width: var(--tty-console-size, 420px);
+}
+
+html.tty-console-right :is(#main-view) {
+  justify-self: start;
+  width: calc(100% - var(--tty-console-size, 420px) - 8px) !important;
+}
+
+/* The title bar: drag it to move the pane. Buttons sit on the border's right. */
+.tty-console-bar {
+  position: absolute;
+  inset: 0 14px auto;
+  z-index: 2;
+  display: flex;
+  gap: 1.5ch;
+  height: 14px;
+  font-size: 11px;
+  line-height: 14px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.tty-console-title {
+  margin-right: auto;
+  padding: 0 6px;
   background: var(--spice-main);
   color: var(--tty-line);
-  font-size: 11px;
-  line-height: 12px;
+}
+
+.tty-console-button {
+  padding: 0 6px;
+  border: 0;
+  background: var(--spice-main);
+  font: inherit;
+  color: var(--spice-subtext);
+  cursor: pointer;
+}
+
+.tty-console-button::before {
+  content: "[";
+}
+
+.tty-console-button::after {
+  content: "]";
+}
+
+.tty-console-button:is(:hover, :focus-visible) {
+  color: var(--tty-line);
+}
+
+/* The grip: the gap between the console and the main view. */
+.tty-console-grip {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+
+html.tty-console-bottom .tty-console-grip {
+  inset: -8px 0 auto;
+  height: 14px;
+  cursor: row-resize;
+}
+
+html.tty-console-right .tty-console-grip {
+  inset: 0 auto 0 -8px;
+  width: 12px;
+  cursor: col-resize;
+}
+
+.tty-console-grip:hover,
+html.tty-resizing .tty-console-grip {
+  background: linear-gradient(var(--tty-line), var(--tty-line)) center / 100% 2px no-repeat;
+}
+
+html.tty-console-right .tty-console-grip:hover,
+html.tty-console-right.tty-resizing .tty-console-grip {
+  background: linear-gradient(var(--tty-line), var(--tty-line)) center / 2px 100% no-repeat;
+}
+
+/* While dragging, nothing else reacts and no text gets selected. */
+html.tty-resizing,
+html.tty-resizing * {
+  user-select: none !important;
+}
+
+.tty-dock-hint {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  border: 1px dashed var(--tty-line);
+  background: rgba(var(--spice-rgb-button), 0.08);
+  pointer-events: none;
+}
+
+.tty-dock-hint[hidden] {
+  display: none;
+}
+
+/* Up next's grip, on its inner edge. */
+.tty-queue-grip {
+  position: absolute;
+  inset: 12px auto 1px 0;
+  z-index: 3;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.tty-queue-grip:hover,
+html.tty-resizing .tty-queue-grip {
+  background: linear-gradient(var(--tty-line), var(--tty-line)) left / 2px 100% no-repeat;
 }
 
 .tty-console-out {
@@ -1030,14 +1153,49 @@ html.tty-console-open .tty-prompt .tty-cursor {
 /* Spotify's look: a rounded card in its own type. */
 html.tty-spotify .tty-console {
   border-radius: 8px;
-  padding: 16px;
-  background: var(--background-elevated-base, #1f1f1f);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  padding: 36px 16px 16px;
+  background: var(--background-base, #121212);
   font-family: inherit;
 }
 
-html.tty-spotify .tty-console::before {
+html.tty-spotify .tty-console::after {
   content: none;
+}
+
+html.tty-spotify .tty-console-bar {
+  inset: 10px 14px auto 16px;
+  height: 20px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+html.tty-spotify .tty-console-title {
+  padding: 0;
+  background: transparent;
+  color: var(--text-base, #fff);
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+html.tty-spotify .tty-console-button {
+  background: transparent;
+  color: var(--text-subdued, #b3b3b3);
+  text-transform: capitalize;
+}
+
+html.tty-spotify .tty-console-button::before,
+html.tty-spotify .tty-console-button::after {
+  content: none;
+}
+
+html.tty-spotify .tty-console-button:is(:hover, :focus-visible) {
+  color: var(--text-base, #fff);
+}
+
+html.tty-spotify .tty-dock-hint {
+  border-radius: 8px;
+  border-color: var(--text-bright-accent, #1ed760);
+  background: rgba(30, 215, 96, 0.08);
 }
 
 html.tty-spotify .tty-console :is(.tty-console-row.is-echo, .tty-console-row.is-ok, .tty-console-row.is-chart, .tty-console-prompt, .tty-console-song.is-clean .tty-queue-mix) {
