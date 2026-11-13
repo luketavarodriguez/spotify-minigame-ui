@@ -930,6 +930,12 @@ html.tty-console-open .tty-prompt .tty-cursor {
   color: var(--tty-line);
 }
 
+/* What the model says, set apart from command output. */
+.tty-console-row.is-say {
+  color: var(--spice-text);
+  font-weight: 700;
+}
+
 .tty-console-row.is-warn {
   color: #e0a040;
 }

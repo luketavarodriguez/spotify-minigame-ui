@@ -1735,6 +1735,7 @@
   // a click on a row queues that song. In a set, rows are graded against the
   // song before them, like up next.
   let results = [];
+  let resultsName = ""; // What the last list was, for a playlist's default name and for the model.
   const printSongs = (songs, before) => {
     results = songs;
     songs.forEach((song, i) => {
@@ -1850,7 +1851,6 @@
     return ratios.map((ratio) => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor(((ratio - low) / (high - low)) * 8))]).join("");
   };
 
-  let lastSet = null;
 
   // A command returns ASK when what followed it reads like a sentence, not
   // like its own arguments: "find me something mellow", "queue three songs
@@ -1866,12 +1866,13 @@
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
         ["play 2", "play one from the last list now"],
+        ["play all", "play the whole list now, in place of what you had queued"],
         ["smooth", "reorder the next 30 songs. undo puts them back"],
         ["set 60m peak", "build a set: flat, up, down or peak"],
-        ["save my set", "save the last set as a playlist"],
+        ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
         ["clear", "empty this window. Esc closes it"],
-        ["plain words", "anything else goes to a model on this computer, which picks the commands. Try: something like this but slower"],
+        ["plain words", "anything else goes to a model on this computer. It picks the commands and remembers the conversation. Try: play something like this but slower"],
         ["model", "which model answers plain words"],
       ]) {
         const row = print("", "help");
@@ -1917,8 +1918,12 @@
       if (near) songs.sort((a, b) => tempoApart(near, songFacts(a.uri)[0]) - tempoApart(near, songFacts(b.uri)[0]));
       else if (high) songs.sort((a, b) => songFacts(a.uri)[0] - songFacts(b.uri)[0]);
       if (!songs.length && words.length > 1) return ASK;
-      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${songs.length > 20 ? ", first 20:" : ":"}` : "no liked songs match", songs.length ? "" : "dim");
-      printSongs(songs.slice(0, 20));
+      // A tempo range with many matches shows 20 spread across it, not the 20 slowest.
+      const spread = high && songs.length > 20;
+      const shown = spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20);
+      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${spread ? ", 20 spread across the range:" : songs.length > 20 ? ", first 20:" : ":"}` : "no liked songs match", songs.length ? "" : "dim");
+      printSongs(shown);
+      resultsName = `Find: ${args.join(" ")}`;
     },
 
     async mix(args) {
@@ -1945,6 +1950,7 @@
       const what = step ? `fit ${item.name}'s key, a step ${args[0].toLowerCase()}` : `mix cleanly with ${item.name}`;
       print(songs.length ? `${songs.length} liked songs ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs ${what}`, songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
+      resultsName = `${step ? `A step ${args[0].toLowerCase()} than` : "Mixes with"} ${item.name}`;
     },
 
     async add(args) {
@@ -1955,23 +1961,33 @@
     },
 
     async play(args) {
-      if (args.some((arg) => !/^\d+$/.test(arg))) return ASK;
-      const [song] = pick(args);
-      if (!song) {
-        print(results.length ? "play which? Try: play 1" : "nothing to play yet. Run find, mix or set first", "dim");
+      if (args.some((arg) => !/^(\d+(-\d+)?|all)$/i.test(arg))) return ASK;
+      const songs = pick(args);
+      if (!songs.length) {
+        print(results.length ? "play which? Try: play 1, or play all" : "nothing to play yet. Run find, mix or set first", "dim");
         return;
       }
-      await S.Platform.PlayerAPI.addToQueue([{ uri: song.uri }]);
-      for (let tries = 0; tries < 30; tries += 1) {
-        const queued = upcoming().find((next) => next.provider === "queue" && next.uri === song.uri);
-        if (queued) {
-          await S.Platform.PlayerAPI.skipTo({ uid: queued.uid, uri: queued.uri });
-          print(`playing ${song.name}`, "ok");
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      const player = S.Platform.PlayerAPI;
+      const queuedSongs = () => upcoming().filter((next) => next.provider === "queue");
+      const settle = async (done) => {
+        for (let tries = 0; tries < 30 && !done(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+        return done();
+      };
+      // Several songs take over from what you had queued. One song plays next and leaves the rest alone.
+      const replaced = songs.length > 1 ? queuedSongs().length : 0;
+      if (replaced) {
+        await player.clearQueue();
+        await settle(() => !queuedSongs().length);
       }
-      print(`queued ${song.name}, but couldn't jump to it`, "warn");
+      await player.addToQueue(songs.map((song) => ({ uri: song.uri })));
+      const first = await settle(() => queuedSongs().find((next) => next.uri === songs[0].uri));
+      if (!first) {
+        print(`queued ${songs.length === 1 ? songs[0].name : `${songs.length} songs`}, but couldn't jump to ${songs.length === 1 ? "it" : "the first"}`, "warn");
+        return;
+      }
+      await player.skipTo({ uid: first.uid, uri: first.uri });
+      if (songs.length === 1) print(`playing ${songs[0].name}`, "ok");
+      else print(`playing ${songs.length} songs, starting with ${songs[0].name}${replaced ? `. They replaced the ${replaced} you had queued` : ""}`, "ok");
     },
 
     async smooth() {
@@ -2010,26 +2026,31 @@
       const raw = set.songs.map((song) => songFacts(song.uri)[0]);
       const middle = [...raw].sort((a, b) => a - b)[Math.floor(raw.length / 2)];
       const tempos = raw.map((bpm) => Math.round(bpm / 2 ** Math.round(Math.log2(bpm / middle))));
-      lastSet = { songs: set.songs, name: `Set: ${minutes} min ${shape}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}` };
       print(`${set.songs.length} songs, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
       print(`tempo ${tempoChart(set)}  ${tempos[0]} to ${tempos.at(-1)} BPM, top ${Math.max(...tempos)}`, "chart");
       printSongs(set.songs, start?.facts);
-      print("save keeps it as a playlist. add all queues it. Run set again for a different one", "dim");
+      resultsName = `Set: ${minutes} min ${shape}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+      print("play all starts it. save keeps it as a playlist. Run set again for a different one", "dim");
     },
 
     async save(args, line) {
-      if (!lastSet) {
-        print("nothing to save yet. Build one first: set 60m peak", "dim");
+      if (!results.length) {
+        print("nothing to save yet. Run find, mix or set first", "dim");
         return;
       }
-      const name = line.replace(/^\s*save\s*/i, "").trim() || lastSet.name;
+      const typed = line
+        .replace(/^\s*save\s*/i, "")
+        .replace(/^(?:(?:it|this|that|them|these|those|the (?:list|set|songs))\s+)?(?:(?:as|called|named)\s+)?/i, "")
+        .replace(/^["'](.*)["']$/, "$1")
+        .trim();
+      const name = typed || resultsName || "Console list";
       const uri = await S.Platform.RootlistAPI.createPlaylist(name, { before: "start" });
       if (!uri) {
         print("couldn't create the playlist", "warn");
         return;
       }
-      await S.Platform.PlaylistAPI.add(uri, lastSet.songs.map((song) => song.uri), { after: "end" });
-      const row = print(`saved ${lastSet.songs.length} songs as "${name}" `, "ok");
+      await S.Platform.PlaylistAPI.add(uri, results.map((song) => song.uri), { after: "end" });
+      const row = print(`saved ${results.length} songs as "${name}" `, "ok");
       const open = el("button", "tty-console-link", "open");
       open.type = "button";
       open.addEventListener("click", () => {
@@ -2058,6 +2079,7 @@
 
     clear() {
       consoleOut.replaceChildren();
+      chat.length = 0; // A clean window is a new conversation.
     },
   };
 
@@ -2084,31 +2106,45 @@
   let ollama = null; // The address that answered last.
   const MODEL_KEY = "tty-console-model";
   const MODEL_GUIDE = [
-    "You turn a request about music into commands for a console inside Spotify. Answer with JSON only.",
+    "You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only.",
     "Commands:",
-    "find <words> <N>bpm <key>   search the user's Liked Songs. All parts are optional. <N>bpm is a tempo, or use a range like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Words match song titles and artist names only, so leave out genre and mood words like house or chill.",
-    "mix   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%.",
-    "mix slower   the same, but 4% to 15% slower. mix faster   4% to 15% faster.",
-    "add <numbers>   queue songs from the last list, for example: add 1 2 3. Or: add all.",
-    "play <number>   play one song from the last list now.",
-    "smooth   reorder the next 30 queued songs so they run into each other. undo   put them back.",
-    "set <minutes>m <shape>   build a set from Liked Songs that starts from the playing song. Shape is flat, up, down or peak.",
-    "save <name>   save the last set as a playlist.",
+    "find <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Words match song titles and artist names only.",
+    "mix   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
+    "set <minutes>m <shape>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak.",
+    "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
+    "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
+    "save <name>   save the last list as a playlist with that name.",
+    "smooth   reorder the next 30 queued songs so they run into each other. undo puts them back.",
     "now   show the playing song's tempo and key.",
-    "Rules: use only these commands, at most 4, in the order they should run. A command that lists songs (find, mix, set) must come before add or play. Never invent song numbers beyond 5 unless the user asks for more. If the request can't be done with these commands, give no commands.",
-    'Put one short plain sentence in "say" telling the user what you are doing, or why you can\'t.',
+    "Rules:",
+    "Use only these commands, at most 4, in the order they should run. A list command (find, mix, set) must come before play, add or save, unless the user means the list already in the console.",
+    'When the user asks to play, hear, put on or switch to something, finish with "play all". When they ask to queue or add, use add. When they only ask to find or see songs, just list them.',
+    "You can't search by genre or mood. When the user names one, turn it into a tempo range you know for it (ambient or chill 60-90, hip hop 80-100, house 120-128, techno 128-140, hard techno 140-160, drum and bass 165-180) and say that you matched by tempo, not genre.",
+    '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
+    "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
+    "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
+    "If the request can't be done with these commands, give no commands and say so.",
     "Examples:",
     'Request: queue 3 songs that mix with this -> {"say": "Queueing three songs that mix with it.", "commands": ["mix", "add 1 2 3"]}',
-    'Request: something like this but slower -> {"say": "Looking for a slower match.", "commands": ["mix slower"]}',
-    'Request: play some house around 120 bpm -> {"say": "Playing a song near 120 BPM. I can\'t search by genre.", "commands": ["find 120bpm", "play 1"]}',
-    'Request: put on some deftones -> {"say": "Queueing Deftones from your Liked Songs.", "commands": ["find deftones", "add all"]}',
-    'Request: an hour long set that builds, save it as friday -> {"say": "Building a one hour set that climbs.", "commands": ["set 60m up", "save friday"]}',
+    'Request: play some jazz -> {"say": "I can\'t search by genre, and jazz is not in my tempo list. Here are liked songs with jazz in the title or artist.", "commands": ["find jazz"]}',
+    'Request: find me drum and bass -> {"say": "Here are your liked songs at drum and bass tempo, 165 to 180 BPM. I matched by tempo, not genre.", "commands": ["find 165-180bpm"]}',
+    'Request: play something like this but slower -> {"say": "Switching to slower songs in a matching key. Want these saved as a playlist?", "commands": ["mix slower", "play all"]}',
+    'Request: play some hard techno -> {"say": "Playing your liked songs at hard techno tempo, 140 to 160 BPM. I matched by tempo, not genre. Want these saved as a playlist?", "commands": ["find 140-160bpm", "play all"]}',
+    'Request: yes, call it warehouse -> {"say": "Saving it as warehouse.", "commands": ["save warehouse"]}',
+    'Request: sure, name it late night -> {"say": "Saving it as late night.", "commands": ["save late night"]}',
+    'Request: save it as pregame -> {"say": "Saving it as pregame.", "commands": ["save pregame"]}',
+    'Request: play it -> {"say": "Playing the list.", "commands": ["play all"]}',
+    'Request: yes -> {"say": "What should I call the playlist?", "commands": []}',
+    'Request: put on some deftones -> {"say": "Playing Deftones from your Liked Songs.", "commands": ["find deftones", "play all"]}',
+    'Request: build me an hour long set that climbs -> {"say": "Here is a one hour set that climbs. Want me to play it or save it?", "commands": ["set 60m up"]}',
     'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
-    'Request: what is the weather -> {"say": "I can only search, queue and build sets here.", "commands": []}',
+    'Request: what is the weather -> {"say": "I can only find, play, queue and save music here.", "commands": []}',
   ].join("\n");
   const MODEL_REPLY = { type: "object", properties: { say: { type: "string" }, commands: { type: "array", items: { type: "string" } } }, required: ["say", "commands"] };
 
   let asking = null; // The request in flight, so Ctrl+C or a minute's wait can drop it.
+  const chat = []; // Earlier requests and answers, so "yes, call it friday" makes sense.
+  let awaitingName = false; // The model just asked what to call a playlist. The next line is the name.
   const installedModels = async () => {
     for (const port of OLLAMA_PORTS) {
       try {
@@ -2155,13 +2191,20 @@
     const signal = asking.signal;
     const timer = setTimeout(() => asking?.abort("slow"), 60000);
     try {
-      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, { role: "user", content: `Playing now: ${playing}.\nRequest: ${line}` }] };
+      const list = results.length ? `${results.length} songs (${resultsName}): ${results.slice(0, 6).map((song, i) => `${i + 1}. ${song.name} by ${song.artists}`).join("; ")}${results.length > 6 ? "; ..." : ""}` : "empty";
+      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Playing now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
       let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         delete body.think; // Models that don't reason step by step reject the switch.
         res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       }
       reply = JSON.parse((await res.json()).message.content);
+      // Small models sometimes announce an action and forget its command. Ask once more.
+      if (!(reply.commands ?? []).length && /\b(sav|play|queu|add|switch|smooth)(ed|ing)\b/i.test(reply.say ?? "")) {
+        body.messages.push({ role: "assistant", content: JSON.stringify(reply) }, { role: "user", content: "You gave no commands, so nothing happened. Answer again with the commands for what you just said." });
+        const again = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+        if (again.ok) reply = JSON.parse((await again.json()).message.content);
+      }
     } catch {}
     clearTimeout(timer);
     asking = null;
@@ -2172,8 +2215,11 @@
       else print(`${model} didn't give a usable answer. Try again, or use a command (help)`, "warn");
       return;
     }
-    if (reply.say) print(reply.say);
     const lines = (Array.isArray(reply.commands) ? reply.commands : []).filter((command) => typeof command === "string" && command.trim()).slice(0, 4);
+    chat.push({ role: "user", content: `Request: ${line}` }, { role: "assistant", content: JSON.stringify({ say: reply.say ?? "", commands: lines }) });
+    if (chat.length > 12) chat.splice(0, chat.length - 12);
+    if (reply.say) print(reply.say, "say");
+    awaitingName = !lines.length && results.length > 0 && /\b(call|name)\b[^.?!]*\?/i.test(reply.say ?? "");
     if (!lines.length && !reply.say) print("the model had nothing to run", "dim");
     for (const command of lines) await runLine(command, true);
   };
@@ -2183,6 +2229,20 @@
     print(`${fromModel ? ">" : "$"} ${line}`, "echo");
     const args = line.trim().split(/\s+/);
     let name = args.shift().toLowerCase();
+    // Answering "what should I call the playlist?" needs no model: the line is the name.
+    if (awaitingName && !fromModel) {
+      awaitingName = false;
+      if (/^(no|nah|nope|never ?mind|cancel|forget it|skip)\b/i.test(line.trim())) {
+        print("okay, not saved", "dim");
+        return;
+      }
+      if (!Object.hasOwn(commands, name) && name !== "queue") {
+        const title = line.trim().replace(/^(?:(?:let'?s\s+)?(?:call|name)\s+(?:it|the playlist)|how about)\s+/i, "");
+        chat.push({ role: "user", content: `Request: ${line.trim()}` }, { role: "assistant", content: JSON.stringify({ say: `Saving it as ${title}.`, commands: [`save ${title}`] }) });
+        await commands.save([], `save ${title}`);
+        return;
+      }
+    }
     // "queue smooth" and "queue undo" read naturally; "queue 1 3" means add.
     if (name === "queue") name = ["smooth", "undo"].includes(args[0]?.toLowerCase()) ? args.shift().toLowerCase() : "add";
     try {
