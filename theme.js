@@ -1865,12 +1865,130 @@
     return [...new Set(picked)];
   };
 
-  // Liked Songs, with a note while their tempos and keys are still arriving.
-  const likedSongs = async () => {
-    const songs = await loadLibrary();
-    const ready = songs.filter((song) => songFacts(song.uri) && songTags.has(trackId(song.uri))).length;
-    if (ready < songs.length * 0.95) print(`still indexing Liked Songs: ${ready} of ${songs.length} ready. Results are partial for the next minute.`, "dim");
+  // ---- Your songs: Liked Songs plus the playlists you made ----
+  //
+  // Commands search "your songs" unless told otherwise. A command can end
+  // with "in <playlist>" to look in one playlist (any in your library, yours
+  // or followed), "in liked" for Liked Songs alone, or "in library" for
+  // every playlist you have. Your own playlists are read in the background,
+  // four at a time, the first time the console is used.
+  let playlists = null; // [{ uri, name, own, total, songs: null until read }]
+  const loadPlaylists = async () => {
+    if (playlists) return playlists;
+    const root = await S.Platform.RootlistAPI.getContents({ limit: 5000, offset: 0 });
+    const found = [];
+    const walk = (items) => {
+      for (const item of items ?? []) {
+        if (item.type === "folder") walk(item.items);
+        else if (item.type === "playlist") found.push({ uri: item.uri, name: item.name ?? "", own: Boolean(item.isOwnedBySelf), total: item.totalLength ?? 0, songs: null });
+      }
+    };
+    walk(root?.items);
+    playlists = found;
+    return found;
+  };
+  const readPlaylist = async (list) => {
+    if (list.songs) return list.songs;
+    const songs = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await S.Platform.PlaylistAPI.getContents(list.uri, { limit: 500, offset });
+      const items = page?.items ?? [];
+      for (const item of items) {
+        if (!trackId(item.uri)) continue;
+        songs.push({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0, year: item.addedAt ? new Date(item.addedAt).getFullYear() : 0 });
+      }
+      if (items.length < 500) break;
+    }
+    list.songs = songs;
+    wantSongs(songs.map((song) => song.uri), false);
     return songs;
+  };
+  const readSeveral = async (lists) => {
+    const queue = lists.filter((list) => !list.songs);
+    await Promise.all(
+      Array.from({ length: 4 }, async () => {
+        while (queue.length) await readPlaylist(queue.shift()).catch(() => {});
+      }),
+    );
+  };
+  let ownReading = null;
+  const readOwn = () => (ownReading ??= loadPlaylists().then((lists) => readSeveral(lists.filter((list) => list.own))));
+
+  // Does the command end with "in <somewhere>"? Returns the rest of the words and where to look.
+  const readScope = async (args) => {
+    for (let i = args.length - 2; i >= 0; i -= 1) {
+      if (args[i].toLowerCase() !== "in") continue;
+      const place = args.slice(i + 1).join(" ").toLowerCase().replace(/^(my|the) /, "").replace(/ playlist$/, "");
+      if (/^(liked|liked songs|likes)$/.test(place)) return { args: args.slice(0, i), scope: { liked: true } };
+      if (/^(library|everything|all playlists|every playlist)$/.test(place)) return { args: args.slice(0, i), scope: { all: true } };
+      const lists = await loadPlaylists().catch(() => []);
+      const named = (test) => lists.find((list) => test(list.name.toLowerCase()));
+      const list = named((name) => name === place) ?? named((name) => name.replace(/^(my|the) /, "") === place) ?? named((name) => name.startsWith(place)) ?? named((name) => name.includes(place));
+      if (list) return { args: args.slice(0, i), scope: { list } };
+    }
+    return { args, scope: null };
+  };
+
+  // The songs a command looks through, and what to call them: "of your songs", "songs in House", "liked songs".
+  const songsFor = async (scope) => {
+    const liked = await loadLibrary();
+    let songs = liked;
+    let noun = "liked songs";
+    if (scope?.list) {
+      songs = await readPlaylist(scope.list);
+      noun = `songs in ${scope.list.name}`;
+    } else if (!scope?.liked) {
+      const lists = await loadPlaylists().catch(() => []);
+      const wanted = lists.filter((list) => scope?.all || list.own);
+      const unread = wanted.filter((list) => !list.songs).length;
+      if (scope?.all) {
+        if (unread) print(`reading ${unread} playlists...`, "dim");
+        await readSeveral(wanted);
+      } else {
+        // Don't hold a command up for the background read: wait a few seconds at most.
+        await Promise.race([readOwn(), new Promise((resolve) => setTimeout(resolve, 4000))]);
+        const left = wanted.filter((list) => !list.songs).length;
+        if (left) print(`still reading your playlists: ${wanted.length - left} of ${wanted.length} so far. Results will grow over the next few seconds.`, "dim");
+      }
+      const all = new Map(liked.map((song) => [song.uri, song]));
+      for (const list of wanted) for (const song of list.songs ?? []) if (!all.has(song.uri)) all.set(song.uri, song);
+      songs = [...all.values()];
+      noun = scope?.all ? "songs in your library" : "of your songs";
+    }
+    const ready = songs.filter((song) => songFacts(song.uri) && songTags.has(trackId(song.uri))).length;
+    if (ready < songs.length * 0.95) print(`still indexing: ${ready} of ${songs.length} songs have a tempo, key and tags so far. Results are partial for the next minute.`, "dim");
+    return { songs, noun };
+  };
+
+  // Spotify's whole catalog, by title or artist. The query id changes with
+  // Spotify versions, so it is read from the app's own search code each session.
+  let searchQuery = null;
+  const catalogSearch = async (words, limit = 20) => {
+    const graph = S.GraphQL;
+    let query = graph?.Definitions?.searchTracks;
+    if (!query) {
+      searchQuery ??= (/"searchTracks","query","([a-f0-9]{64})"/.exec(await (await fetch("/xpui-routes-search.js")).text()) ?? [])[1];
+      if (!searchQuery) throw new Error("no search");
+      query = { name: "searchTracks", operation: "query", sha256Hash: searchQuery, value: null };
+    }
+    const found = await graph.Request(query, { searchTerm: words, offset: 0, limit, numberOfTopResults: limit, includeAudiobooks: false, includePreReleases: false, includeAlbumPreReleases: false, includeAuthors: false, includeEpisodeContentRatingsV2: false });
+    return (found?.data?.searchV2?.tracksV2?.items ?? [])
+      .map((entry) => entry.item?.data)
+      .filter((track) => trackId(track?.uri))
+      .map((track) => ({ uri: track.uri, name: track.name ?? "", artists: (track.artists?.items ?? []).map((artist) => artist.profile?.name).join(", "), ms: track.duration?.totalMilliseconds ?? 0 }));
+  };
+  // Tempos, keys and tags for songs just found: asked for now, waited on briefly.
+  const learnSongs = async (songs) => {
+    wantSongs(songs.map((song) => song.uri), true);
+    for (let tries = 0; tries < 25 && songs.some((song) => !songTags.has(trackId(song.uri)) && !indexMisses.has(trackId(song.uri))); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+  };
+
+  // What undo would reverse: the last play or add. { done: what to say, run }
+  let undoPlan = null;
+  const queuedNow = () => upcoming().filter((next) => next.provider === "queue");
+  const settle = async (done) => {
+    for (let tries = 0; tries < 30 && !done(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    return done();
   };
 
   // Which of the words name a genre or mood? The longest phrase wins, so
@@ -1971,7 +2089,7 @@
   };
 
   // The song a command is about: one named from Liked Songs, or the one playing.
-  const songNamed = (words, songs) => {
+  const songNamed = async (words, songs) => {
     if (!words.length) {
       const item = state().item;
       return trackId(item?.uri) ? { uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", ") } : null;
@@ -1979,7 +2097,12 @@
     // "mi combi by ollie bc": the title, then the artist. An exact title wins.
     const [title, artist] = words.join(" ").split(/ by /);
     const fits = (song) => !artist || song.artists.toLowerCase().includes(artist);
-    return songs.find((song) => song.name.toLowerCase() === title && fits(song)) ?? songs.find((song) => song.name.toLowerCase().includes(title) && fits(song)) ?? songs.find((song) => words.every((word) => `${song.name} ${song.artists}`.toLowerCase().includes(word))) ?? null;
+    const mine = songs.find((song) => song.name.toLowerCase() === title && fits(song)) ?? songs.find((song) => song.name.toLowerCase().includes(title) && fits(song)) ?? songs.find((song) => words.every((word) => `${song.name} ${song.artists}`.toLowerCase().includes(word)));
+    if (mine) return mine;
+    // Not one of yours: take Spotify's top result for the name.
+    const [hit] = await catalogSearch(words.join(" "), 1).catch(() => []);
+    if (hit) await learnSongs([hit]);
+    return hit ?? null;
   };
 
   // How far apart two tempos are, with half and double time folded together.
@@ -2065,21 +2188,25 @@
   const commands = {
     help() {
       for (const [command, does] of [
-        ["find deep house", "liked songs by genre or mood. Mix in a tempo, key or name: find techno 130-140bpm"],
-        ["find 124bpm 8A", "liked songs near a tempo, in a key"],
-        ["genres", "the genres and moods in your Liked Songs"],
+        ["find deep house", "your songs by genre or mood. Mix in a tempo, key or name: find techno 130-140bpm"],
+        ["find 124bpm 8A", "your songs near a tempo, in a key"],
+        ["... in afroset", "end find, mix, like or set with a playlist to look only there. Also: in liked, in library"],
+        ["search daft punk", "songs from all of Spotify, by title or artist"],
+        ["playlists", "your playlists. playlists house lists the ones with house in the name"],
+        ["genres", "the genres and moods across your songs"],
         ["find party", "occasions work too: party, workout, study, sleep, relax, dinner"],
         ["find reggae or dub", "any of several genres or moods"],
         ["find 2018", "songs you liked that year. Mix it in: find house 2018"],
         ["top", "your most played songs this month"],
-        ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
+        ["mix", "your songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
-        ["like", "liked songs that sound like this one, by genre and mood. like mix also matches key and tempo. Or name a song: like mi combi"],
-        ["radio", "new songs like this one from all of Spotify, not in your Liked Songs. Also: radio mix"],
+        ["like", "your songs that sound like this one, by genre and mood. like mix also matches key and tempo. Or name any song: like mi combi"],
+        ["radio", "new songs like this one from all of Spotify, that you don't have. Also: radio mix"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
         ["play 2", "play one from the last list now"],
         ["play all", "play the whole list now, in place of what you had queued"],
-        ["smooth", "reorder the next 30 songs. undo puts them back"],
+        ["undo", "take back the last play, add or smooth"],
+        ["smooth", "reorder the next 30 songs so they run into each other"],
         ["set 60m peak", "build a set: flat, up, down or peak. Add a genre: set 60m peak house"],
         ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
@@ -2120,19 +2247,23 @@
       resultsName = "Most played this month";
     },
 
-    async genres() {
-      const common = commonTags(await likedSongs());
+    async genres(args) {
+      const { scope } = await readScope(["genres", ...args]);
+      const { songs: pool, noun } = await songsFor(scope);
+      const common = commonTags(pool);
       const row = (kind, limit) => common.filter((tag) => tag[1] === kind).slice(0, limit).map((tag) => `${tag[0]} ${tag[2]}`).join(", ");
       if (!common.length) {
         print("no tags yet. They arrive in the first minute after Spotify opens", "dim");
         return;
       }
-      print(`genres in your Liked Songs: ${row("g", 40)}`);
+      print(`genres across ${noun.replace(/^of /, "")}: ${row("g", 40)}`);
       print(`moods: ${row("m", 20)}`);
       print("Use any of them in find, mix and set: find deep house, mix techno, set 60m peak house", "dim");
     },
 
     async find(args) {
+      const scoped = await readScope(args);
+      args = scoped.args;
       let low = 0;
       let high = 0;
       let near = 0;
@@ -2155,7 +2286,7 @@
       }
       // "find me some sad indie" is a sentence, not a search for the words "me" and "some".
       if (words.some((word) => ["me", "some", "any", "songs", "tracks", "music", "something", "stuff", "please", "around"].includes(word))) return ASK;
-      const liked = await likedSongs();
+      const { songs: liked, noun } = await songsFor(scoped.scope);
       let { tags, rest } = readTags(words, liked);
       // A lone word can be a genre or part of a name, so it matches either. Tagged songs come first.
       const loose = tags.length === 1 && !rest.length && !near && !high && !key;
@@ -2182,7 +2313,7 @@
       if (!songs.length && rest.length === 1) {
         const vibe = await vibeTags(rest[0], liked);
         if (vibe) {
-          print(`"${rest[0]}" is not a name or a tag in your Liked Songs. The nearest tags, picked by the model, are ${vibe.name.replace(/^.*\((.*)\)$/, "$1")}`, "dim");
+          print(`"${rest[0]}" is not a name or a tag here. The nearest tags, picked by the model, are ${vibe.name.replace(/^.*\((.*)\)$/, "$1")}`, "dim");
           tags = [vibe];
           rest = [];
           songs = search([]);
@@ -2196,9 +2327,9 @@
       if ((tags.length || year) && !near && !high) songs.sort((a, b) => b.strength - a.strength);
       const spread = high && songs.length > 20;
       const shown = (spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20)).map((entry) => entry.song);
-      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` you liked in ${year}` : ""}`;
+      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` added in ${year}` : ""}`;
       const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : year && !tags.length && !near ? ", 20 at random:" : ", first 20:") : ":";
-      print(songs.length ? `${songs.length} ${year ? "" : "liked "}${songs.length === 1 ? "song" : "songs"}${tagged}${which}` : "no liked songs match. genres lists the genres and moods you can search", songs.length ? "" : "dim");
+      print(songs.length ? `${songs.length} ${noun}${tagged}${which}` : `nothing among ${noun.replace(/^of /, "")} matches. genres lists the genres and moods you can search, and search looks through all of Spotify`, songs.length ? "" : "dim");
       printSongs(shown);
       resultsName = `Find: ${args.join(" ")}`;
     },
@@ -2211,8 +2342,10 @@
         return;
       }
       // "slower" and "faster": keys that fit, 4% to 15% down or up in tempo.
+      const scoped = await readScope(args);
+      args = scoped.args;
       const step = { slower: -1, faster: 1 }[args[0]?.toLowerCase()] ?? 0;
-      const liked = await likedSongs();
+      const { songs: liked, noun } = await songsFor(scoped.scope);
       // Anything after that must name genres or moods: mix techno, mix slower chill.
       const { tags, rest } = readTags(args.slice(step ? 1 : 0).map((arg) => arg.toLowerCase()), liked);
       if (rest.length) {
@@ -2233,7 +2366,7 @@
         .map((entry) => entry.song);
       const tagged = tags.length ? `tagged ${tags.map((tag) => tag.name).join(" and ")} ` : "";
       const what = `${tagged}${step ? `fit ${item.name}'s key, a step ${args[0].toLowerCase()}` : `mix cleanly with ${item.name}`}`;
-      print(songs.length ? `${songs.length} liked songs ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs ${what}`, songs.length ? "" : "dim");
+      print(songs.length ? `${songs.length} ${noun} ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `none ${noun} ${what}`.replace("none songs", "no songs").replace("none liked", "no liked"), songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
       resultsName = `${step ? `A step ${args[0].toLowerCase()} than` : "Mixes with"} ${item.name}`;
     },
@@ -2242,12 +2375,13 @@
     // "mix" alone only matches key and tempo, which pairs a latin house track
     // with an indie one. like mix asks for both.
     async like(args) {
-      const words = args.map((arg) => arg.toLowerCase());
+      const scoped = await readScope(args);
+      const words = scoped.args.map((arg) => arg.toLowerCase());
       const mixToo = words.includes("mix");
-      const liked = await likedSongs();
-      const from = songNamed(words.filter((word) => word !== "mix"), liked);
+      const { songs: liked, noun } = await songsFor(scoped.scope);
+      const from = await songNamed(words.filter((word, i) => word !== "mix" && !(i === 0 && /^(like|for|to)$/.test(word))), liked);
       if (!from) {
-        print(words.length > (mixToo ? 1 : 0) ? "no liked song by that name. Try the title alone, or play it and run like" : "nothing is playing", "dim");
+        print(words.length > (mixToo ? 1 : 0) ? "no song by that name among yours or on Spotify. Try the title alone" : "nothing is playing", "dim");
         return;
       }
       const mine = tagsOf(from.uri);
@@ -2275,7 +2409,7 @@
           return !seen.has(name) && seen.add(name);
         });
       const sound = mine.filter((tag) => tag.kind === "g").slice(0, 4).map((tag) => tag.name).join(", ");
-      print(songs.length ? `${songs.length} liked songs sound like ${from.name} (${sound})${mixToo ? " and mix cleanly with it" : ""}${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs sound like ${from.name} (${sound})${mixToo ? " and also mix cleanly with it. Try like without mix" : ""}`, songs.length ? "" : "dim");
+      print(songs.length ? `${songs.length} ${noun} sound like ${from.name} (${sound})${mixToo ? " and mix cleanly with it" : ""}${songs.length > 20 ? ", closest 20:" : ":"}` : `nothing among ${noun.replace(/^of /, "")} sounds like ${from.name} (${sound})${mixToo ? " and also mixes cleanly with it. Try like without mix" : ""}`, songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
       resultsName = `Like ${from.name}`;
     },
@@ -2285,10 +2419,10 @@
     async radio(args) {
       const words = args.map((arg) => arg.toLowerCase());
       const mixToo = words.includes("mix");
-      const liked = await likedSongs();
-      const from = songNamed(words.filter((word) => word !== "mix"), liked);
+      const { songs: liked } = await songsFor(null);
+      const from = await songNamed(words.filter((word, i) => word !== "mix" && !(i === 0 && /^(like|for|to)$/.test(word))), liked);
       if (!from) {
-        print(words.length > (mixToo ? 1 : 0) ? "no liked song by that name. Play the song and run radio, or use a title from your Liked Songs" : "nothing is playing", "dim");
+        print(words.length > (mixToo ? 1 : 0) ? "no song by that name among yours or on Spotify. Try the title alone" : "nothing is playing", "dim");
         return;
       }
       const res = await fetch(`https://spclient.wg.spotify.com/inspiredby-mix/v2/seed_to_playlist/${from.uri}?response-format=json`, {
@@ -2301,7 +2435,7 @@
         .filter((item) => trackId(item.uri) && item.uri !== from.uri && !mine.has(item.uri))
         .map((item) => ({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0 }));
       if (!songs.length) {
-        print(found.length ? `Spotify's radio for ${from.name} is all songs you already like` : `Spotify has no radio for ${from.name}`, "dim");
+        print(found.length ? `Spotify's radio for ${from.name} is all songs you already have` : `Spotify has no radio for ${from.name}`, "dim");
         return;
       }
       // Their tempos and keys arrive in a moment. Wait briefly so the list can show them.
@@ -2317,8 +2451,21 @@
     async add(args) {
       if (args.some((arg) => !/^(\d+(-\d+)?|all)$/i.test(arg))) return ASK;
       const songs = pick(args);
-      if (!songs.length) print(results.length ? "add which? Try: add 1 3, add 2-6 or add all" : "nothing to add yet. Run find, mix or set first", "dim");
-      else await queueSongs(songs);
+      if (!songs.length) {
+        print(results.length ? "add which? Try: add 1 3, add 2-6 or add all" : "nothing to add yet. Run find, mix or set first", "dim");
+        return;
+      }
+      await queueSongs(songs);
+      const added = songs.map((song) => song.uri);
+      undoPlan = {
+        done: `took ${added.length === 1 ? "that song" : `those ${added.length} songs`} back out of the queue`,
+        run: async () => {
+          // The newest queued copy of each added song.
+          const queue = queuedNow().reverse();
+          const gone = added.map((uri) => queue.find((next) => next.uri === uri && !next.taken && (next.taken = true))).filter(Boolean);
+          if (gone.length) await S.Platform.PlayerAPI.removeFromQueue(gone.map((next) => ({ uid: next.uid, uri: next.uri })));
+        },
+      };
     },
 
     async play(args) {
@@ -2329,26 +2476,81 @@
         return;
       }
       const player = S.Platform.PlayerAPI;
-      const queuedSongs = () => upcoming().filter((next) => next.provider === "queue");
-      const settle = async (done) => {
-        for (let tries = 0; tries < 30 && !done(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
-        return done();
-      };
+      // Remember what was on, so undo can put it back: the song, the place in it, and the queue.
+      const now = state();
+      const was = { uri: now.item?.uri, at: (now.positionAsOfTimestamp ?? 0) + (now.isPaused ? 0 : Date.now() - (now.timestamp ?? Date.now())), paused: now.isPaused !== false, queued: queuedNow().map((next) => next.uri) };
       // Several songs take over from what you had queued. One song plays next and leaves the rest alone.
-      const replaced = songs.length > 1 ? queuedSongs().length : 0;
+      const replaced = songs.length > 1 ? queuedNow().length : 0;
       if (replaced) {
         await player.clearQueue();
-        await settle(() => !queuedSongs().length);
+        await settle(() => !queuedNow().length);
       }
       await player.addToQueue(songs.map((song) => ({ uri: song.uri })));
-      const first = await settle(() => queuedSongs().find((next) => next.uri === songs[0].uri));
+      const first = await settle(() => queuedNow().find((next) => next.uri === songs[0].uri));
       if (!first) {
         print(`queued ${songs.length === 1 ? songs[0].name : `${songs.length} songs`}, but couldn't jump to ${songs.length === 1 ? "it" : "the first"}`, "warn");
         return;
       }
       await player.skipTo({ uid: first.uid, uri: first.uri });
-      if (songs.length === 1) print(`playing ${songs[0].name}`, "ok");
-      else print(`playing ${songs.length} songs, starting with ${songs[0].name}${replaced ? `. They replaced the ${replaced} you had queued` : ""}`, "ok");
+      const played = songs.map((song) => song.uri);
+      undoPlan = {
+        done: "your music is back where it was",
+        run: async () => {
+          // Clear what play queued, go back to the old song at the old place, then restore the old queue.
+          const mine = queuedNow().filter((next) => played.includes(next.uri));
+          if (mine.length) await player.removeFromQueue(mine.map((next) => ({ uid: next.uid, uri: next.uri })));
+          if (trackId(was.uri)) {
+            await player.addToQueue([{ uri: was.uri }]);
+            const back = await settle(() => queuedNow().find((next) => next.uri === was.uri));
+            if (back) {
+              await player.skipTo({ uid: back.uid, uri: back.uri });
+              await settle(() => state().item?.uri === was.uri);
+              await player.seekTo(Math.max(0, Math.floor(was.at)));
+              if (was.paused) await player.pause();
+            }
+          }
+          // The old queue goes back last. Spotify drops a queue change sent while it is
+          // still settling from the jump, so wait, then check it took, and send it once more if not.
+          const missing = () => was.queued.filter((uri) => !queuedNow().some((next) => next.uri === uri));
+          for (let attempt = 0; replaced && attempt < 3 && missing().length; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            await player.addToQueue(missing().map((uri) => ({ uri })));
+            await settle(() => !missing().length);
+          }
+        },
+      };
+      if (songs.length === 1) print(`playing ${songs[0].name}. undo goes back`, "ok");
+      else print(`playing ${songs.length} songs, starting with ${songs[0].name}${replaced ? `. They replaced the ${replaced} you had queued` : ""}. undo puts your music back`, "ok");
+    },
+
+    // search: Spotify's whole catalog by title or artist, for songs that aren't yours yet.
+    async search(args) {
+      if (!args.length) {
+        print("search for what? Try: search around the world daft punk", "dim");
+        return;
+      }
+      if (/^(for|up)$/i.test(args[0]) && args.length > 1) args = args.slice(1); // "search for fred again"
+      let songs;
+      try {
+        songs = await catalogSearch(args.join(" "), 20);
+      } catch {
+        print("couldn't reach Spotify's search", "warn");
+        return;
+      }
+      if (songs.length) await learnSongs(songs);
+      print(songs.length ? `Spotify's top ${songs.length} for "${args.join(" ")}":` : `Spotify found nothing for "${args.join(" ")}"`, songs.length ? "" : "dim");
+      printSongs(songs);
+      resultsName = `Search: ${args.join(" ")}`;
+    },
+
+    // playlists: the playlists in your library, biggest first, or the ones matching some words.
+    async playlists(args) {
+      const words = args.map((arg) => arg.toLowerCase());
+      const lists = (await loadPlaylists()).filter((list) => words.every((word) => list.name.toLowerCase().includes(word)));
+      const shown = [...lists].sort((a, b) => Number(b.own) - Number(a.own) || b.total - a.total).slice(0, 30);
+      print(lists.length ? `${lists.length} playlists${words.length ? ` matching "${words.join(" ")}"` : `, ${lists.filter((list) => list.own).length} of them yours`}${lists.length > 30 ? ". The 30 biggest:" : ":"}` : "no playlist by that name", lists.length ? "" : "dim");
+      if (shown.length) print(shown.map((list) => `${list.name} (${list.total})`).join("  ·  "));
+      if (shown.length) print("End a command with in <playlist> to look inside one: find house in my track ids, set 60m peak in afroset", "dim");
     },
 
     async smooth() {
@@ -2357,11 +2559,21 @@
       await smooth();
       const result = smoothNote?.text ?? "";
       if (result === "already smooth") print("the next 30 songs are already as smooth as they get", "ok");
-      else if (smoothUndo) print(`next 30 songs reordered: ${result}. undo puts them back`, "ok");
+      else if (smoothUndo) {
+        undoPlan = null; // The newest thing to undo is now this reorder.
+        print(`next 30 songs reordered: ${result}. undo puts them back`, "ok");
+      }
       else print("couldn't reorder the queue", "warn");
     },
 
     async undo() {
+      if (undoPlan) {
+        const plan = undoPlan;
+        undoPlan = null;
+        await plan.run();
+        print(plan.done, "ok");
+        return;
+      }
       if (!smoothUndo) {
         print("nothing to undo", "dim");
         return;
@@ -2372,7 +2584,9 @@
     },
 
     async set(args) {
-      const liked = await likedSongs();
+      const scoped = await readScope(args);
+      args = scoped.args;
+      const { songs: liked, noun } = await songsFor(scoped.scope);
       // Words that aren't the length or the shape must name genres or moods: set 60m peak house.
       const { tags, rest } = readTags(args.filter((arg) => !/^\d{1,3}m?$/i.test(arg) && !SHAPES[arg.toLowerCase()]).map((arg) => arg.toLowerCase()), liked);
       if (rest.length) {
@@ -2387,7 +2601,7 @@
       const tagged = tags.length ? ` of ${tags.map((tag) => tag.name).join(" and ")}` : "";
       const set = buildSet(liked.filter((song) => tags.every((tag) => tagWeight(song.uri, tag) > 0)), minutes, shape, start);
       if (!set) {
-        print(`not enough liked songs${tagged ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : " with a tempo and key"} to build a set from`, "dim");
+        print(`not enough ${noun.replace(/^of /, "")}${tagged ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : " with a tempo and key"} to build a set from`.replace("not enough your songs", "not enough of your songs"), "dim");
         return;
       }
       const clean = set.songs.reduce((count, song, i) => count + (transition(i ? songFacts(set.songs[i - 1].uri) : start?.facts, songFacts(song.uri)).grade === "clean" ? 1 : 0), 0);
@@ -2395,7 +2609,7 @@
       const raw = set.songs.map((song) => songFacts(song.uri)[0]);
       const middle = [...raw].sort((a, b) => a - b)[Math.floor(raw.length / 2)];
       const tempos = raw.map((bpm) => Math.round(bpm / 2 ** Math.round(Math.log2(bpm / middle))));
-      print(`${set.songs.length} songs${tagged}, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
+      print(`${set.songs.length} songs${tagged}${scoped.scope?.list ? ` from ${scoped.scope.list.name}` : ""}, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
       print(`tempo ${tempoChart(set)}  ${tempos[0]} to ${tempos.at(-1)} BPM, top ${Math.max(...tempos)}`, "chart");
       printSongs(set.songs, start?.facts);
       resultsName = `Set: ${minutes} min ${shape}${tagged}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
@@ -2495,18 +2709,22 @@
   const MODEL_GUIDE = [
     'You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only, in this shape: {"say": "...", "commands": ["..."]}.',
     "Commands:",
-    "find <genre or mood> <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
-    "find <year>   list songs the user liked in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
+    "find <genre or mood> <words> <N>bpm <key>   list songs from the user's own songs, which are their Liked Songs and the playlists they made. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
+    "find <year>   list songs the user added in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
+    "search <words>   list songs from Spotify's whole catalog by title or artist. Use it when the user asks for a specific song or artist by name, since it may not be among their songs.",
+    "playlists   list the user's playlists.",
+    "find, mix, like and set can end with in <playlist name> to look only inside that playlist, with in liked for Liked Songs only, or with in library for every playlist they follow too. Example: find techno in house edm.",
     "top   list the user's most played songs this month. This is the only play count there is.",
     'A year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. Only "released", "came out" or a decade can\'t be done.',
-    "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster. mix does not look at how songs sound.",
-    "like <song>   list Liked Songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
-    "radio <song>   list songs from Spotify's whole catalog that are like a song and are not in Liked Songs. Without a song it uses the playing one. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
-    "set <minutes>m <shape> <genre>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
+    "mix <genre>   list the user's songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster. mix does not look at how songs sound.",
+    "like <song>   list the user's songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi, and can be any song on Spotify. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
+    "radio <song>   list songs from Spotify's whole catalog that are like a song and are not among the user's songs. Without a song it uses the playing one, and a named song can be any song on Spotify. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
+    "set <minutes>m <shape> <genre>   list a set built from the user's songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
     "save <name>   save the last list as a playlist with that name.",
-    "smooth   reorder the next 30 queued songs so they run into each other. undo puts them back.",
+    "smooth   reorder the next 30 queued songs so they run into each other.",
+    "undo   take back the last play, add or smooth, and put the music and queue back as they were.",
     "now   show the playing song's tempo, key and tags.",
     "Rules:",
     "Use only these commands, at most 4, in the order they should run. A list command (find, mix, set) must come before play, add or save, unless the user means the list already in the console.",
@@ -2518,7 +2736,7 @@
     'Words such as like, similar to, more of this and in this style mean like, never mix alone. Use mix alone only when the user asks purely about mixing, blending or transitions. New, discover, recommend, or something I have not heard mean radio.',
     "Never answer a question about the playing song from memory. Use now.",
     "A new request needs a new list. Use play <number> or add on the last list only when the user is plainly talking about that list (play the third one, add those).",
-    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, lyrics, or searching Spotify's catalog by name (radio is the only reach outside Liked Songs). Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
+    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, or lyrics. Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
@@ -2526,40 +2744,47 @@
     "Examples (they assume these names are in the tag list; only ever use names that are):",
     'Request: queue 3 songs that mix with this -> {"say": "Queueing three songs that mix with it.", "commands": ["mix", "add 1 2 3"]}',
     'Request: queue a few techno tracks that mix with this -> {"say": "Queueing techno that mixes with it.", "commands": ["mix techno", "add 1 2 3"]}',
-    'Request: play some jazz -> {"say": "Playing jazz from your Liked Songs. Want these saved as a playlist?", "commands": ["find jazz", "play all"]}',
+    'Request: play some jazz -> {"say": "Playing jazz from your songs. Want these saved as a playlist?", "commands": ["find jazz", "play all"]}',
     'Request: play some hard techno -> {"say": "Playing your fastest techno, 140 to 160 BPM. Want these saved as a playlist?", "commands": ["find techno 140-160bpm", "play all"]}',
     'Request: play some reggae -> {"say": "Reggae is not one of your tags, so I am searching the word.", "commands": ["find reggae", "play all"]}',
-    'Request: play one of my favorite songs from 2018 -> {"say": "I can\'t tell which songs are your favorites. Here are songs you liked in 2018, and I am playing one.", "commands": ["find 2018", "play 1"]}',
+    'Request: play one of my favorite songs from 2018 -> {"say": "I can\'t tell which songs are your favorites. Here are songs you added in 2018, and I am playing one.", "commands": ["find 2018", "play 1"]}',
     'Request: play the best song ever -> {"say": "I can\'t judge that. Here are your most played songs this month, and I am playing the top one.", "commands": ["top", "play 1"]}',
-    'Request: queue 5 hip hop songs from 2019 -> {"say": "Queueing five hip hop songs you liked in 2019.", "commands": ["find hip hop 2019", "add 1 2 3 4 5"]}',
-    'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you liked in 2020.", "commands": ["find chill 2020"]}',
-    'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you liked in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
+    'Request: queue 5 hip hop songs from 2019 -> {"say": "Queueing five hip hop songs you added in 2019.", "commands": ["find hip hop 2019", "add 1 2 3 4 5"]}',
+    'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you added in 2020.", "commands": ["find chill 2020"]}',
+    'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you added in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
     'Request: play something released in the 90s -> {"say": "I can\'t tell when a song was released, only when you liked it. Tell me a genre or a mood and I will play that.", "commands": []}',
-    'Request: play songs like this -> {"say": "Playing liked songs that sound like this one.", "commands": ["like", "play all"]}',
-    'Request: play songs like Mi Combi by Ollie BC that mix well with it -> {"say": "Playing liked songs that sound like Mi Combi and mix cleanly with it.", "commands": ["like mi combi mix", "play all"]}',
-    'Request: find songs like Mi Combi that mix well with it -> {"say": "Here are liked songs that sound like Mi Combi and mix cleanly with it. Want me to play them?", "commands": ["like mi combi mix"]}',
-    'Request: what mixes with this -> {"say": "Here are liked songs in a matching key and tempo.", "commands": ["mix"]}',
+    'Request: play songs like this -> {"say": "Playing songs of yours that sound like this one.", "commands": ["like", "play all"]}',
+    'Request: play songs like Mi Combi by Ollie BC that mix well with it -> {"say": "Playing songs of yours that sound like Mi Combi and mix cleanly with it.", "commands": ["like mi combi mix", "play all"]}',
+    'Request: find songs like Mi Combi that mix well with it -> {"say": "Here are songs of yours that sound like Mi Combi and mix cleanly with it. Want me to play them?", "commands": ["like mi combi mix"]}',
+    'Request: what mixes with this -> {"say": "Here are songs of yours in a matching key and tempo.", "commands": ["mix"]}',
     'Request: recommend me something new -> {"say": "Here are new songs like the one playing, from Spotify\'s radio. Want me to play them?", "commands": ["radio"]}',
     'Request: play me new music like this that will mix well -> {"say": "Playing new songs like this one that mix cleanly with it.", "commands": ["radio mix", "play all"]}',
     'Request: play the song that goes na na na -> {"say": "I can\'t search lyrics. Tell me the title or the artist and I will find it.", "commands": []}',
     'Request: play something upbeat but not too fast -> {"say": "Playing upbeat songs between 95 and 118 BPM.", "commands": ["find upbeat 95-118bpm", "play all"]}',
-    'Request: I am hosting a dinner, put something on -> {"say": "Playing dinner music from your Liked Songs: lounge, smooth and classy.", "commands": ["find dinner", "play all"]}',
+    'Request: I am hosting a dinner, put something on -> {"say": "Playing dinner music from your songs: lounge, smooth and classy.", "commands": ["find dinner", "play all"]}',
     'Request: what have I been listening to most -> {"say": "Here are your most played songs this month.", "commands": ["top"]}',
     'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
-    'Request: play some music I can party to -> {"say": "Playing party music from your Liked Songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
-    'Request: play some stoner music -> {"say": "Playing stoner music from your Liked Songs: psychedelic rock, reggae, dub and trip hop.", "commands": ["find psychedelic rock or reggae or dub or trip hop", "play all"]}',
-    'Request: play some hippie music -> {"say": "Playing hippie music from your Liked Songs: folk rock, psychedelic rock and classic rock.", "commands": ["find folk rock or psychedelic rock or classic rock", "play all"]}',
+    'Request: play some music I can party to -> {"say": "Playing party music from your songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
+    'Request: play some stoner music -> {"say": "Playing stoner music from your songs: psychedelic rock, reggae, dub and trip hop.", "commands": ["find psychedelic rock or reggae or dub or trip hop", "play all"]}',
+    'Request: play some hippie music -> {"say": "Playing hippie music from your songs: folk rock, psychedelic rock and classic rock.", "commands": ["find folk rock or psychedelic rock or classic rock", "play all"]}',
     'Request: an hour set of stoner music that builds -> {"say": "Here is a one hour set of psychedelic rock, reggae and dub that builds. Want me to play it or save it?", "commands": ["set 60m up psychedelic rock or reggae or dub"]}',
     'Request: play some polka -> {"say": "Polka is not one of your tags, so I am searching the word.", "commands": ["find polka", "play all"]}',
     'Request: something for a rainy day -> {"say": "Playing rainy day music: melancholy, mellow and cozy.", "commands": ["find melancholy or mellow or cozy", "play all"]}',
-    'Request: something chill to work to -> {"say": "Playing chill songs from your Liked Songs.", "commands": ["find chill", "play all"]}',
+    'Request: something chill to work to -> {"say": "Playing chill songs from your songs.", "commands": ["find chill", "play all"]}',
     'Request: play something like this but slower -> {"say": "Switching to slower songs in a matching key. Want these saved as a playlist?", "commands": ["mix slower", "play all"]}',
     'Request: yes, call it warehouse -> {"say": "Saving it as warehouse.", "commands": ["save warehouse"]}',
     'Request: sure, name it late night -> {"say": "Saving it as late night.", "commands": ["save late night"]}',
     'Request: save it as pregame -> {"say": "Saving it as pregame.", "commands": ["save pregame"]}',
     'Request: play it -> {"say": "Playing the list.", "commands": ["play all"]}',
     'Request: yes -> {"say": "What should I call the playlist?", "commands": []}',
-    'Request: put on some deftones -> {"say": "Playing Deftones from your Liked Songs.", "commands": ["find deftones", "play all"]}',
+    'Request: play Around the World by Daft Punk -> {"say": "Playing Around the World by Daft Punk.", "commands": ["search around the world daft punk", "play 1"]}',
+    'Request: play some house from my track ids playlist -> {"say": "Playing house from your Track IDs playlist.", "commands": ["find house in track ids", "play all"]}',
+    'Request: build an hour set from my afroset playlist -> {"say": "Here is a one hour set from Afroset. Want me to play it or save it?", "commands": ["set 60m peak in afroset"]}',
+    'Request: go back to what I was listening to -> {"say": "Putting your music back.", "commands": ["undo"]}',
+    'Request: put on Hey Ya -> {"say": "Playing Hey Ya.", "commands": ["search hey ya", "play 1"]}',
+    'Request: queue 3 songs from my house playlist that mix with this -> {"say": "Queueing three songs from your House playlist that mix with it.", "commands": ["mix in house", "add 1 2 3"]}',
+    'Request: find new music like Around the World by Daft Punk -> {"say": "Here are new songs like Around the World, from Spotify\'s radio. Want me to play them?", "commands": ["radio around the world daft punk"]}',
+    'Request: put on some deftones -> {"say": "Playing Deftones from your songs.", "commands": ["find deftones", "play all"]}',
     'Request: build me an hour long house set that climbs -> {"say": "Here is a one hour house set that climbs. Want me to play it or save it?", "commands": ["set 60m up house"]}',
     'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
     'Request: what is the weather -> {"say": "I can only find, play, queue and save music here.", "commands": []}',
@@ -2931,7 +3156,7 @@
     dock.open = true;
     saveDock();
     placeConsole();
-    if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them, or say what you want in plain words. Esc closes this.", "dim");
+    if (!consoleOut.childElementCount) print("Commands run on your songs: Liked Songs and the playlists you made. help lists them, or say what you want in plain words. Esc closes this.", "dim");
     if (focus) consoleInput.focus();
     maybeSetup(focus);
   };
