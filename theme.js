@@ -1749,7 +1749,7 @@
       const items = page?.items ?? [];
       for (const item of items) {
         if (!trackId(item.uri)) continue;
-        songs.push({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0 });
+        songs.push({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0, year: item.addedAt ? new Date(item.addedAt).getFullYear() : 0 });
       }
       if (items.length < 500) break;
     }
@@ -1978,6 +1978,8 @@
         ["find 124bpm 8A", "liked songs near a tempo, in a key"],
         ["genres", "the genres and moods in your Liked Songs"],
         ["find party", "occasions work too: party, workout, study, sleep, relax, dinner"],
+        ["find 2018", "songs you liked that year. Mix it in: find house 2018"],
+        ["top", "your most played songs this month"],
         ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
@@ -2008,6 +2010,21 @@
       if (tags.length) print(`tagged ${tags.map((tag) => tag.name).join(", ")}`, "dim");
     },
 
+    // Your most played songs this month, from the theme's own count (it only keeps the current month).
+    top() {
+      const tracks = Object.entries(stats.months[monthKey()]?.tracks ?? {})
+        .filter(([uri, track]) => trackId(uri) && track.plays > 0)
+        .sort((a, b) => b[1].plays - a[1].plays || b[1].ms - a[1].ms)
+        .slice(0, 20);
+      if (!tracks.length) {
+        print("no plays counted yet this month", "dim");
+        return;
+      }
+      print(`your ${tracks.length} most played songs this month, counted by this theme since ${stats.since ?? "it was installed"}:`);
+      printSongs(tracks.map(([uri, track]) => ({ uri, name: `${track.name} (${track.plays}x)`, artists: track.artist, ms: 0 })));
+      resultsName = "Most played this month";
+    },
+
     async genres() {
       const common = commonTags(await likedSongs());
       const row = (kind, limit) => common.filter((tag) => tag[1] === kind).slice(0, limit).map((tag) => `${tag[0]} ${tag[2]}`).join(", ");
@@ -2025,6 +2042,7 @@
       let high = 0;
       let near = 0;
       let key = "";
+      let year = 0;
       const words = [];
       for (const arg of args) {
         const range = /^(\d{2,3})-(\d{2,3})(?:bpm)?$/i.exec(arg);
@@ -2033,10 +2051,11 @@
         if (range) [low, high] = [Number(range[1]), Number(range[2])];
         else if (tempo) near = Number(tempo[1]);
         else if (wheel) key = `${wheel[1]}${wheel[2].toUpperCase()}`;
+        else if (/^(19|20)\d\d$/.test(arg)) year = Number(arg); // The year you liked the song. Spotify doesn't say here when it was released.
         else words.push(arg.toLowerCase());
       }
       if (!args.length) {
-        print("find what? Try: find deep house, find 124bpm 8A, find techno 130-140bpm, or find a name", "dim");
+        print("find what? Try: find deep house, find 124bpm 8A, find techno 130-140bpm, find 2018, or find a name", "dim");
         return;
       }
       // "find me some sad indie" is a sentence, not a search for the words "me" and "some".
@@ -2046,12 +2065,13 @@
       // A lone word can be a genre or part of a name, so it matches either. Tagged songs come first.
       const loose = tags.length === 1 && !rest.length && !near && !high && !key;
       const songs = liked
-        .map((song) => ({ song, facts: songFacts(song.uri), text: `${song.name} ${song.artists}`.toLowerCase(), weights: tags.map((tag) => tagWeight(song.uri, tag)) }))
-        .filter(({ facts, text, weights }) => {
+        .map((song) => ({ song, year: song.year, facts: songFacts(song.uri), text: `${song.name} ${song.artists}`.toLowerCase(), weights: tags.map((tag) => tagWeight(song.uri, tag)) }))
+        .filter(({ song, facts, text, weights }) => {
           if ((near || high || key) && !facts) return false;
           if (near && tempoApart(near, facts[0]) > 0.03) return false;
           if (high && (facts[0] < low || facts[0] > high)) return false;
           if (key && facts[1] !== key) return false;
+          if (year && song.year !== year) return false;
           if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].word)))) return false;
           return rest.every((word) => text.includes(word));
         })
@@ -2061,12 +2081,12 @@
       // A genre with many matches is shuffled a little, so it isn't the same 20 every time.
       if (near) songs.sort((a, b) => tempoApart(near, a.facts[0]) - tempoApart(near, b.facts[0]));
       else if (high) songs.sort((a, b) => a.facts[0] - b.facts[0]);
-      else if (tags.length) for (const entry of songs) entry.strength += songs.length > 20 ? Math.random() * 0.3 : 0;
-      if (tags.length && !near && !high) songs.sort((a, b) => b.strength - a.strength);
+      else if (tags.length || year) for (const entry of songs) entry.strength += songs.length > 20 ? Math.random() * (tags.length ? 0.3 : 1) : 0;
+      if ((tags.length || year) && !near && !high) songs.sort((a, b) => b.strength - a.strength);
       const spread = high && songs.length > 20;
       const shown = (spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20)).map((entry) => entry.song);
-      const tagged = tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : "";
-      const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : ", first 20:") : ":";
+      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` that you liked in ${year}` : ""}`;
+      const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : year && !tags.length && !near ? ", 20 at random:" : ", first 20:") : ":";
       print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${tagged}${which}` : "no liked songs match. genres lists the genres and moods you can search", songs.length ? "" : "dim");
       printSongs(shown);
       resultsName = `Find: ${args.join(" ")}`;
@@ -2263,6 +2283,8 @@
     "You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only.",
     "Commands:",
     "find <genre or mood> <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
+    "find <year>   list songs the user liked in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
+    "top   list the user's most played songs this month. This is the only play count there is.",
     "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
     "set <minutes>m <shape> <genre>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
@@ -2276,6 +2298,8 @@
     "For a genre or mood, use the closest names from the tag list. Use one or two tags, never more. If the user asks for a style that is not in the list, use its nearest tag and add a tempo range that fits it (hard techno: techno 140-160bpm). If nothing in the list is close, do not refuse: run find with the user's own word, which also matches titles and artists.",
     "Occasions work as search words too: party, workout, gym, running, hype, driving, study, focus, work, sleep, relax, dinner. Pass the occasion word itself, for example: find party.",
     "Never answer a question about the playing song from memory. Use now.",
+    "A new request needs a new list. Use play <number> or add on the last list only when the user is plainly talking about that list (play the third one, add those).",
+    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, lyrics, or anything outside Liked Songs. Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
@@ -2286,6 +2310,16 @@
     'Request: play some jazz -> {"say": "Playing jazz from your Liked Songs. Want these saved as a playlist?", "commands": ["find jazz", "play all"]}',
     'Request: play some hard techno -> {"say": "Playing your fastest techno, 140 to 160 BPM. Want these saved as a playlist?", "commands": ["find techno 140-160bpm", "play all"]}',
     'Request: play some reggae -> {"say": "Reggae is not one of your tags, so I am searching the word.", "commands": ["find reggae", "play all"]}',
+    'Request: play one of my favorite songs from 2018 -> {"say": "I can\'t tell which songs are your favorites. Here are songs you liked in 2018, and I am playing one.", "commands": ["find 2018", "play 1"]}',
+    'Request: play the best song ever -> {"say": "I can\'t judge that. Here are your most played songs this month, and I am playing the top one.", "commands": ["top", "play 1"]}',
+    'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you liked in 2020.", "commands": ["find chill 2020"]}',
+    'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you liked in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
+    'Request: play something released in the 90s -> {"say": "I can\'t tell when a song was released, only when you liked it. Tell me a genre or a mood and I will play that.", "commands": []}',
+    'Request: recommend me something new -> {"say": "I can only reach your Liked Songs, so I can\'t find new music. Want something you liked years ago, such as songs from 2018?", "commands": []}',
+    'Request: play the song that goes na na na -> {"say": "I can\'t search lyrics. Tell me the title or the artist and I will find it.", "commands": []}',
+    'Request: play something upbeat but not too fast -> {"say": "Playing upbeat songs between 95 and 118 BPM.", "commands": ["find upbeat 95-118bpm", "play all"]}',
+    'Request: I am hosting a dinner, put something on -> {"say": "Playing dinner music from your Liked Songs: lounge, smooth and classy.", "commands": ["find dinner", "play all"]}',
+    'Request: what have I been listening to most -> {"say": "Here are your most played songs this month.", "commands": ["top"]}',
     'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
     'Request: play some music I can party to -> {"say": "Playing party music from your Liked Songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
     'Request: something chill to work to -> {"say": "Playing chill songs from your Liked Songs.", "commands": ["find chill", "play all"]}',
@@ -2354,7 +2388,7 @@
       // The genres and moods this library actually has, so the model picks real names.
       const known = commonTags(await loadLibrary().catch(() => [])).filter((tag) => tag[1] !== "o").slice(0, 160).map((tag) => tag[0]).join(", ");
       const list = results.length ? `${results.length} songs (${resultsName}): ${results.slice(0, 6).map((song, i) => `${i + 1}. ${song.name} by ${song.artists}`).join("; ")}${results.length > 6 ? "; ..." : ""}` : "empty";
-      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Tag list: ${known || "none yet"}.\nPlaying now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
+      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 8192 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Tag list: ${known || "none yet"}.\nPlaying now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
       let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         delete body.think; // Models that don't reason step by step reject the switch.
