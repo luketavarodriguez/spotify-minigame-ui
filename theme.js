@@ -2085,9 +2085,9 @@
       if ((tags.length || year) && !near && !high) songs.sort((a, b) => b.strength - a.strength);
       const spread = high && songs.length > 20;
       const shown = (spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20)).map((entry) => entry.song);
-      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` that you liked in ${year}` : ""}`;
+      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` you liked in ${year}` : ""}`;
       const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : year && !tags.length && !near ? ", 20 at random:" : ", first 20:") : ":";
-      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${tagged}${which}` : "no liked songs match. genres lists the genres and moods you can search", songs.length ? "" : "dim");
+      print(songs.length ? `${songs.length} ${year ? "" : "liked "}${songs.length === 1 ? "song" : "songs"}${tagged}${which}` : "no liked songs match. genres lists the genres and moods you can search", songs.length ? "" : "dim");
       printSongs(shown);
       resultsName = `Find: ${args.join(" ")}`;
     },
