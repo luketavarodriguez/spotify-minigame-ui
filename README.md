@@ -22,7 +22,7 @@ Developed by [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagra
 - **Smooth:** one click on the pane's border reorders the next 30 songs so tempos and keys run into each other. It works on any queue: an album, someone else's playlist, radio. Click again to undo.
 - **A working console:** click the prompt in the top bar, or press the backtick key, and type. It opens as a pane in the layout, not a window on top: drag its title to dock it under or beside the main view, and drag its edge to resize it. Up next has a grip too, which sets the width of both side panes. `find deep house` searches your Liked Songs by genre or mood, and `find 124bpm 8A` by tempo and key. `genres` lists the genres and moods you have. Occasions work too (`find party`, `find workout`), `find reggae or dub` matches any of several, `find 2018` lists songs you liked that year, and `top` lists your most played this month. `mix` lists the ones that mix cleanly with the playing song. `add 1 3 5` queues them. `help` lists every command.
 - **Sets:** `set 60m peak` builds an hour of Liked Songs that starts from the playing song, follows a tempo shape (flat, up, down or peak) and mixes cleanly from song to song. Add a genre to keep it in one style: `set 60m peak house`. `play all` starts it, and `save` keeps any list as a playlist, which Spotify's own Mix and DJ apps can then use.
-- **Plain words, with a model on your own computer:** type a sentence in the console, such as `play something like this but slower` or `queue 3 songs that mix with this`, and a local model picks the commands. It switches the music when you ask it to play, remembers the conversation, and offers follow-ups you can answer, such as saving what it found as a playlist. This part is optional and needs [Ollama](https://ollama.com). Nothing you type leaves your computer.
+- **Plain words, with a model on your own computer:** type a sentence in the console, such as `play something like this but slower` or `queue 3 songs that mix with this`, and a local model picks the commands. It switches the music when you ask it to play, remembers the conversation, and offers follow-ups you can answer, such as saving what it found as a playlist. This part is optional. Connect a model with a free API key, which needs nothing installed, or run one on your own computer with [Ollama](https://ollama.com).
 - **Listening stats** on Home: session, today and this month, plus top songs and artists.
 - **Two looks:** the terminal look (monospace, green borders, green halftone artwork) or Spotify's own look, keeping the layout and the games.
 - **Two views:** the tall games view, or a compact player bar with no games.
@@ -83,12 +83,33 @@ Spicetify is still how the theme loads into the app. You still need it installed
 - **What counts as a clean mix:** tempos within 6% of each other, with half and double time counting as the same tempo, and keys that are the same, one step apart on the Camelot wheel, or major/minor twins. Smooth leaves songs you queued yourself ahead of the rest, the way Spotify plays them.
 - **Where genres come from:** Spotify tags each song with genres and moods, each with a weight, and the theme indexes those alongside tempo and key. The tags are Spotify's and some are wrong: a rap song can carry "new age". A set without a genre is chosen by tempo and key alone, so it can put very different songs side by side. Run `set` again for a different draw.
 - **Where BPM and key come from:** Spotify's own numbers, the ones behind its Mix feature. The theme asks for them in batches and keeps them in local storage, so each song is asked about once. It also indexes your Liked Songs in the background, about a minute for 6,000 songs.
-- **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS.
+- **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS. The theme itself is plain CSS and JavaScript and should run on Windows and Linux, but it hasn't been tested there. `self-repair.sh` and the two Ollama scripts are for macOS only.
 - **After a Spotify update:** Spotify updates wipe Spicetify's changes. On macOS, [self-repair](#self-repair-on-macos) puts the theme back for you. By hand: run `spicetify upgrade`, then `spicetify backup apply`. New Spotify versions often need the newer Spicetify. If the theme is showing and you only want to refresh it, `spicetify apply` is enough.
 
 ## Plain words in the console
 
-The console's commands work on their own. To also type sentences, install [Ollama](https://ollama.com), which runs language models on your computer, and a model:
+The console's commands work on their own. To also type sentences, connect a model. There are two ways.
+
+### With a free API key (nothing to install)
+
+The first time you open the console, it asks for a key. Get one from any of these, paste it in, and press connect:
+
+- [Groq](https://console.groq.com/keys)
+- [Google Gemini](https://aistudio.google.com/apikey)
+- [OpenRouter](https://openrouter.ai/keys), which uses its free models
+- [Cerebras](https://cloud.cerebras.ai)
+
+Each has a free tier at the time of writing, with daily limits that are plenty for a music console. The console picks a suitable model from the provider's list. `model` shows which, and `model <name>` switches. `key` brings the box back later, and `key remove` disconnects.
+
+What to know before you paste a key:
+
+- **Where the key is kept:** in Spotify's own storage on your computer, unencrypted. It is sent only to the provider it belongs to.
+- **What the provider receives:** your sentence, the playing song's name, tempo and key, the genre names in your library, and the first few songs of the last list. Not your whole library, and nothing when you use typed commands.
+- **Another server:** anything that speaks the OpenAI chat format works. Paste its address, a space, then the key, for example `https://example.com/v1 my-key`.
+
+### With Ollama, on your own computer
+
+Nothing you type leaves your computer this way. Install [Ollama](https://ollama.com), which runs language models locally, and a model:
 
 ```bash
 ollama pull qwen3:8b
@@ -102,7 +123,9 @@ sh ollama-allow.sh apply
 
 That lasts until you log out. `sh ollama-allow.sh install` repeats it at every login, and `sh ollama-allow.sh remove` undoes it. On other systems, set `OLLAMA_ORIGINS` to `https://xpui.app.spotify.com` and restart Ollama.
 
-How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It is given the genres and moods in your library, so "play some deep house" or "something chill to work to" searches by tag. A vibe such as "stoner music" or "late night drive" is turned into the few tags that fit it, and the console says which. Answers take a second or two once the model is loaded. If another program is keeping Ollama busy, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. To stop the waiting, `sh ollama-console.sh install` runs a second Ollama that only the console uses (macOS, about 6 GB of memory while its model is loaded). `model` shows which model answers, and `model <name>` switches.
+If a key is saved, the console uses it. Without one, it uses Ollama.
+
+How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It is given the genres and moods in your library, so "play some deep house" or "something chill to work to" searches by tag. A vibe such as "stoner music" or "late night drive" is turned into the few tags that fit it, and the console says which. Answers take a second or two. With Ollama, the first one waits for the model to load, and if another program is keeping Ollama busy, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. To stop the waiting, `sh ollama-console.sh install` runs a second Ollama that only the console uses (macOS, about 6 GB of memory while its model is loaded). `model` shows which model answers, and `model <name>` switches.
 
 ## Self-repair on macOS
 

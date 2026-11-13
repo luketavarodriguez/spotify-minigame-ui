@@ -1935,26 +1935,19 @@
   const vibeTags = async (vibe, songs) => {
     if (vibes.has(vibe)) return vibes.get(vibe);
     try {
-      const model = await chosenModel();
-      if (!model) return null;
+      const who = await answerer();
+      if (!who.model) return null;
       const names = commonTags(songs).filter((tag) => tag[1] !== "o" && tag[2] >= 5).slice(0, 180).map((tag) => tag[0]);
-      const res = await fetch(`${ollama}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(30000),
-        body: JSON.stringify({
-          model,
-          stream: false,
-          think: false,
-          format: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } }, required: ["tags"] },
-          options: { temperature: 0, num_ctx: 8192 },
-          messages: [
-            { role: "system", content: "You match a vibe, scene, occasion or music style to tags. From the tag list, choose the two to four tags whose music fits it best, copied exactly. For a genre that is not in the list, choose the nearest genres that are. Prefer specific tags over broad ones like electronic. If the text is not a vibe, scene, occasion or music style (a misspelled name, a person, nonsense), answer with an empty list. Answer with JSON only." },
-            { role: "user", content: `Tag list: ${names.join(", ")}.\nMatch this: ${vibe}` },
-          ],
-        }),
-      });
-      const picked = [...new Set((JSON.parse((await res.json()).message.content).tags ?? []).map((tag) => String(tag).toLowerCase()).filter((tag) => names.includes(tag)))].slice(0, 4);
+      const reply = await think(
+        who,
+        [
+          { role: "system", content: 'You match a vibe, scene, occasion or music style to tags. From the tag list, choose the two to four tags whose music fits it best, copied exactly. For a genre that is not in the list, choose the nearest genres that are. Prefer specific tags over broad ones like electronic. If the text is not a vibe, scene, occasion or music style (a misspelled name, a person, nonsense), answer with an empty list. Answer with JSON only, in this shape: {"tags": ["..."]}.' },
+          { role: "user", content: `Tag list: ${names.join(", ")}.\nMatch this: ${vibe}` },
+        ],
+        { type: "object", properties: { tags: { type: "array", items: { type: "string" } } }, required: ["tags"] },
+        AbortSignal.timeout(30000),
+      );
+      const picked = [...new Set((reply.tags ?? []).map((tag) => String(tag).toLowerCase()).filter((tag) => names.includes(tag)))].slice(0, 4);
       const tag = picked.length ? { name: `${vibe} (${picked.join(", ").replace(/, ([^,]*)$/, " or $1")})`, word: vibe, numbers: new Set(picked.map((name) => tagNumber.get(name))) } : null;
       vibes.set(vibe, tag);
       return tag;
@@ -2079,6 +2072,7 @@
         ["clear", "empty this window. Esc closes it"],
         ["plain words", "anything else goes to a model on this computer. It picks the commands and remembers the conversation. Try: play something like this but slower"],
         ["model", "which model answers plain words"],
+        ["key", "connect a free hosted model with an API key. key remove disconnects it"],
       ]) {
         const row = print("", "help");
         row.append(el("span", "tty-console-command", command), el("span", "", does));
@@ -2346,20 +2340,38 @@
     },
 
     async model(args) {
+      const provider = savedKey();
       let models;
       try {
-        models = await installedModels();
+        models = provider ? await listHosted(provider) : await installedModels();
       } catch {
-        modelHelp();
+        if (provider) print(`couldn't reach ${provider.name} with the saved key. Run key to replace it`, "warn");
+        else modelHelp();
         return;
       }
-      if (args[0] && !models.includes(args[0])) {
-        print(`Ollama has no model called "${args[0]}"`, "dim");
-      } else if (args[0]) {
-        localStorage.setItem(MODEL_KEY, args[0]);
+      if (args[0] && !models.includes(args[0])) print(`${provider?.name ?? "Ollama"} has no model called "${args[0]}"`, "dim");
+      else if (args[0]) localStorage.setItem(MODEL_KEY, args[0]);
+      const current = provider ? pickHosted(provider, models) : await chosenModel();
+      const where = provider ? ` at ${provider.name}` : ollama?.endsWith("11435") ? " on the console's own Ollama" : " in Ollama on this computer";
+      print(models.length ? `plain words go to ${current}${where}. Others: ${models.filter((name) => name !== current).slice(0, 14).join(", ") || "none"}. Switch with: model <name>` : `${provider?.name ?? "Ollama"} has no models to use`);
+    },
+
+    // key: connect a hosted model, see what is connected, or remove it.
+    async key(args) {
+      if (args[0]?.toLowerCase() === "remove") {
+        localStorage.removeItem(KEY_KEY);
+        localStorage.removeItem(MODEL_KEY);
+        hostedModels.clear();
+        print("key removed. Plain words go back to Ollama on this computer, if it is running", "ok");
+        return;
       }
-      const current = await chosenModel();
-      print(models.length ? `plain words go to ${current}${ollama?.endsWith("11435") ? " on the console's own Ollama" : ""}. Installed: ${models.join(", ")}. Switch with: model <name>` : "Ollama is running but has no models. Run: ollama pull qwen3:8b");
+      if (args.length) {
+        await connectKey(args.join(" "));
+        return;
+      }
+      const provider = savedKey();
+      print(provider ? `connected to ${provider.name}. key remove disconnects it. Paste a new key in the box above to replace it` : "no key saved. Paste one in the box above", provider ? "ok" : "dim");
+      showSetup(true);
     },
 
     clear() {
@@ -2391,7 +2403,7 @@
   let ollama = null; // The address that answered last.
   const MODEL_KEY = "tty-console-model";
   const MODEL_GUIDE = [
-    "You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only.",
+    'You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only, in this shape: {"say": "...", "commands": ["..."]}.',
     "Commands:",
     "find <genre or mood> <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
     "find <year>   list songs the user liked in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
@@ -2476,31 +2488,116 @@
     const saved = localStorage.getItem(MODEL_KEY);
     return (saved && models.includes(saved) ? saved : null) ?? models.find((name) => /^qwen/i.test(name)) ?? models[0] ?? null;
   };
+
+  // ---- A hosted model, for people without Ollama ----
+  //
+  // Paste an API key and plain words go to that provider instead. Several
+  // have a free tier, and all of these speak the same chat format. The key
+  // is kept in Spotify's own storage on this computer. With a key, each
+  // request (your sentence, the playing song, your genre names and the last
+  // list) is sent to the provider. Nothing else is.
+  const KEY_KEY = "tty-console-key";
+  const SETUP_KEY = "tty-console-setup";
+  const PROVIDERS = [
+    { name: "Groq", match: /^gsk_/, base: "https://api.groq.com/openai/v1", prefer: [/llama-3\.3-70b/, /llama.*70b/, /gpt-oss-120b/, /qwen/, /llama/] },
+    { name: "Google Gemini", match: /^AIza/, base: "https://generativelanguage.googleapis.com/v1beta/openai", prefer: [/gemini-[\d.]+-flash$/, /gemini-[\d.]+-flash-(?!lite)/, /gemini.*flash/] },
+    { name: "OpenRouter", match: /^sk-or-/, base: "https://openrouter.ai/api/v1", only: /:free$/, prefer: [/llama-3\.3-70b/, /gpt-oss/, /qwen/, /gemini/, /deepseek/, /mistral/, /llama/] },
+    { name: "Cerebras", match: /^csk-/, base: "https://api.cerebras.ai/v1", prefer: [/llama-3\.3-70b/, /llama.*70b/, /gpt-oss/, /qwen/, /llama/] },
+  ];
+  const NOT_CHAT = /whisper|tts|embed|guard|image|audio|rerank|moderation|speech|vision-preview|live|veo|imagen/i;
+  // Which provider a pasted key belongs to. "https://host/v1 key" names any other server that speaks the same format.
+  const readKey = (text) => {
+    const custom = /^(https?:\/\/\S+)\s+(\S+)$/.exec(text.trim());
+    if (custom) return { name: new URL(custom[1]).host, base: custom[1].replace(/\/+$/, ""), key: custom[2] };
+    const provider = PROVIDERS.find((known) => known.match.test(text.trim()));
+    return provider ? { name: provider.name, base: provider.base, key: text.trim() } : null;
+  };
+  const savedKey = () => {
+    try {
+      return JSON.parse(localStorage.getItem(KEY_KEY) ?? "null");
+    } catch {
+      return null;
+    }
+  };
+  const hostedModels = new Map(); // provider address -> its model names, for this session
+  const listHosted = async (provider) => {
+    if (hostedModels.has(provider.base)) return hostedModels.get(provider.base);
+    const res = await fetch(`${provider.base}/models`, { headers: { Authorization: `Bearer ${provider.key}` }, signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw Object.assign(new Error("models"), { status: res.status });
+    const known = PROVIDERS.find((entry) => entry.base === provider.base);
+    const ids = ((await res.json()).data ?? []).map((model) => String(model.id ?? "").replace(/^models\//, "")).filter((id) => id && !NOT_CHAT.test(id) && (!known?.only || known.only.test(id)));
+    hostedModels.set(provider.base, ids);
+    return ids;
+  };
+  // The saved choice, else the provider's best general model by name, newest first.
+  const pickHosted = (provider, ids) => {
+    const saved = localStorage.getItem(MODEL_KEY);
+    if (saved && ids.includes(saved)) return saved;
+    const newest = [...ids].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    for (const pattern of PROVIDERS.find((entry) => entry.base === provider.base)?.prefer ?? []) {
+      const hit = newest.find((id) => pattern.test(id));
+      if (hit) return hit;
+    }
+    return ids[0] ?? null;
+  };
+
+  // Who answers plain words: the hosted model if a key is saved, else Ollama. Null model means none found.
+  const answerer = async () => {
+    const provider = savedKey();
+    if (provider) return { provider, model: pickHosted(provider, await listHosted(provider)), label: provider.name };
+    return { provider: null, model: await chosenModel(), label: "Ollama" };
+  };
+
+  // One question to the model, answered as JSON in the given shape.
+  const think = async (who, messages, shape, signal) => {
+    if (!who.provider) {
+      const body = { model: who.model, stream: false, think: false, format: shape, options: { temperature: 0, num_ctx: 8192 }, messages };
+      let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      if (!res.ok) {
+        delete body.think; // Models that don't reason step by step reject the switch.
+        res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+      }
+      return JSON.parse((await res.json()).message.content);
+    }
+    const body = { model: who.model, messages, temperature: 0, max_tokens: 500, response_format: { type: "json_object" } };
+    const post = () => fetch(`${who.provider.base}/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${who.provider.key}` }, body: JSON.stringify(body), signal });
+    let res = await post();
+    if (res.status === 400) {
+      delete body.response_format; // Not every model takes the JSON switch. The instructions ask for JSON anyway.
+      res = await post();
+    }
+    if (!res.ok) throw Object.assign(new Error("hosted"), { status: res.status });
+    const text = (await res.json()).choices?.[0]?.message?.content ?? "";
+    return JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1));
+  };
+
   const modelHelp = () => {
-    print("That isn't a command, and no model on this computer answered. To use plain words:", "dim");
-    print("  1. install Ollama from ollama.com, then run: ollama pull qwen3:8b", "dim");
-    print(`  2. let Spotify talk to it (macOS): launchctl setenv OLLAMA_ORIGINS "${location.origin}"`, "dim");
-    print("  3. quit and reopen Ollama", "dim");
-    print("help lists the commands that work without it.", "dim");
+    print("That isn't a command, and no model is connected to answer plain words. Two ways to connect one:", "dim");
+    print("  key      paste a free API key (Groq, Gemini, OpenRouter or Cerebras). Nothing to install", "dim");
+    print("  Ollama   run a model on this computer: ollama.com, then see the README", "dim");
+    print("help lists the commands that work without either.", "dim");
   };
 
   const ask = async (line) => {
-    let model;
+    let who;
     try {
-      model = await chosenModel();
-    } catch {
-      modelHelp();
+      who = await answerer();
+    } catch (error) {
+      if (savedKey()) print(error.status === 401 || error.status === 403 ? `${savedKey().name} rejected the saved key. Run key to replace it` : `couldn't reach ${savedKey().name}. Check the connection and try again`, "warn");
+      else modelHelp();
       return;
     }
-    if (!model) {
-      print("Ollama is running but has no models. Run: ollama pull qwen3:8b", "dim");
+    if (!who.model) {
+      print(who.provider ? `${who.provider.name} lists no model this key can use` : "Ollama is running but has no models. Run: ollama pull qwen3:8b", "dim");
       return;
     }
+    const model = who.model;
     const item = state().item;
     const facts = songFacts(item?.uri);
     const playing = item ? `${item.name} by ${(item.artists ?? []).map((artist) => artist.name).join(", ")}${facts ? `, ${Math.round(facts[0])} BPM, key ${facts[1]}` : ""}` : "nothing";
     const waiting = print(`asking ${model}... (Ctrl+C stops)`, "dim");
     let reply = null;
+    let failure = 0;
     asking = new AbortController();
     const signal = asking.signal;
     const timer = setTimeout(() => asking?.abort("slow"), 60000);
@@ -2508,13 +2605,8 @@
       // The genres and moods this library actually has, so the model picks real names.
       const known = commonTags(await loadLibrary().catch(() => [])).filter((tag) => tag[1] !== "o").slice(0, 160).map((tag) => tag[0]).join(", ");
       const list = results.length ? `${results.length} songs (${resultsName}): ${results.slice(0, 6).map((song, i) => `${i + 1}. ${song.name} by ${song.artists}`).join("; ")}${results.length > 6 ? "; ..." : ""}` : "empty";
-      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 8192 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Tag list: ${known || "none yet"}.\nPlaying now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
-      let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      if (!res.ok) {
-        delete body.think; // Models that don't reason step by step reject the switch.
-        res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-      }
-      reply = JSON.parse((await res.json()).message.content);
+      const messages = [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Tag list: ${known || "none yet"}.\nPlaying now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }];
+      reply = await think(who, messages, MODEL_REPLY, signal);
       // Small models sometimes announce an action and forget its command. Ask once more.
       const claimed = /\b(sav|play|queu|add|switch|smooth)(ed|ing)\b/i.test(reply.say ?? "");
       const gaveUp = /can't find|cannot find|not (one of|in) your tags|another genre/i.test(reply.say ?? "");
@@ -2522,17 +2614,20 @@
         const nudge = claimed
           ? "You gave no commands, so nothing happened. Answer again with the commands for what you just said."
           : "Don't stop there. If the request is a vibe or a scene, pick the two to four names from the tag list that fit it, join them with or in a find command, and say which you chose. If it is one specific genre the list doesn't have, run find with the user's own word.";
-        body.messages.push({ role: "assistant", content: JSON.stringify(reply) }, { role: "user", content: nudge });
-        const again = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
-        if (again.ok) reply = JSON.parse((await again.json()).message.content);
+        messages.push({ role: "assistant", content: JSON.stringify(reply) }, { role: "user", content: nudge });
+        reply = await think(who, messages, MODEL_REPLY, signal).catch(() => reply);
       }
-    } catch {}
+    } catch (error) {
+      failure = error?.status ?? 0;
+    }
     clearTimeout(timer);
     asking = null;
     waiting.remove();
     if (!reply) {
       if (signal.reason === "stop") print("^C", "dim");
-      else if (signal.reason === "slow") print(`${model} took over a minute, so the request was dropped. Another program may be keeping Ollama busy. Commands still work (help)`, "warn");
+      else if (signal.reason === "slow") print(`${model} took over a minute, so the request was dropped. ${who.provider ? "" : "Another program may be keeping Ollama busy. "}Commands still work (help)`, "warn");
+      else if (failure === 401 || failure === 403) print(`${who.label} rejected the key. Run key to replace it`, "warn");
+      else if (failure === 429) print(`${who.label}'s free limit is used up for now. Try again in a minute, or use a command (help)`, "warn");
       else print(`${model} didn't give a usable answer. Try again, or use a command (help)`, "warn");
       return;
     }
@@ -2547,7 +2642,7 @@
 
   // One line, typed or from the model. Model lines show with ">" and can't ask the model again.
   const runLine = async (line, fromModel) => {
-    print(`${fromModel ? ">" : "$"} ${line}`, "echo");
+    print(`${fromModel ? ">" : "$"} ${/^\s*key\s+(?!remove\b)\S/i.test(line) ? "key ********" : line}`, "echo");
     const args = line.trim().split(/\s+/);
     let name = args.shift().toLowerCase();
     // Answering "what should I call the playlist?" needs no model: the line is the name.
@@ -2579,7 +2674,7 @@
   const runCommand = async (text) => {
     const line = text.trim();
     if (!line || consoleBusy) return;
-    history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
+    if (!/^key\s+(?!remove\b)\S/i.test(line)) history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
     historyAt = -1;
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
@@ -2589,6 +2684,104 @@
     await runLine(line, false);
     consoleBusy = false;
     consoleBox.classList.remove("is-busy");
+  };
+
+  // ---- First open: connect a model ----
+  // Shown when no key is saved and no Ollama answers, until it is skipped.
+  // The key goes in its own masked field, never in the command line's history.
+  const setupBox = el("form", "tty-console-setup");
+  setupBox.hidden = true;
+  const setupKey = el("input", "tty-console-keyfield");
+  setupKey.type = "password";
+  setupKey.autocomplete = "off";
+  setupKey.spellcheck = false;
+  setupKey.placeholder = "paste an API key";
+  setupKey.setAttribute("aria-label", "API key");
+  const setupGo = el("button", "tty-console-button", "connect");
+  setupGo.type = "submit";
+  const setupSkip = el("button", "tty-console-button", "skip");
+  setupSkip.type = "button";
+  const setupNote = el("div", "tty-console-setup-note");
+  const link = (text, href) => {
+    const a = el("a", "tty-console-link", text);
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    return a;
+  };
+  const setupRow = el("div", "tty-console-setup-row");
+  setupRow.append(setupKey, setupGo, setupSkip);
+  const setupWhere = el("div", "tty-console-setup-text");
+  setupWhere.append("Free keys: ", link("Groq", "https://console.groq.com/keys"), ", ", link("Google Gemini", "https://aistudio.google.com/apikey"), ", ", link("OpenRouter", "https://openrouter.ai/keys"), " or ", link("Cerebras", "https://cloud.cerebras.ai"), ". The key stays in Spotify on this computer. Your requests go to that provider.");
+  setupBox.append(
+    el("div", "tty-console-setup-text", "Typed commands work now (help lists them). To also type plain sentences, connect a model: paste a free API key, or skip and run Ollama on this computer."),
+    setupRow,
+    setupWhere,
+    setupNote,
+  );
+  consoleBox.insertBefore(setupBox, consoleOut);
+
+  const showSetup = (focus) => {
+    setupBox.hidden = false;
+    setupNote.textContent = "";
+    setupKey.value = "";
+    if (focus) setupKey.focus();
+  };
+  const hideSetup = () => {
+    setupBox.hidden = true;
+    setupKey.value = "";
+  };
+  // Check a pasted key against its provider, and keep it if it works.
+  const connectKey = async (text) => {
+    const provider = readKey(text);
+    if (!provider) {
+      setupNote.textContent = "That doesn't look like a Groq, Gemini, OpenRouter or Cerebras key. For another server, paste its address, a space, then the key.";
+      if (setupBox.hidden) print(setupNote.textContent, "warn");
+      return false;
+    }
+    setupNote.textContent = `checking with ${provider.name}...`;
+    try {
+      hostedModels.delete(provider.base);
+      const model = pickHosted(provider, await listHosted(provider));
+      if (!model) throw new Error("none");
+      localStorage.setItem(KEY_KEY, JSON.stringify(provider));
+      localStorage.removeItem(MODEL_KEY);
+      hideSetup();
+      print(`connected to ${provider.name}. Plain words go to ${model}. Try: play something chill`, "ok");
+      consoleInput.focus();
+      return true;
+    } catch (error) {
+      const why = error.status === 401 || error.status === 403 || error.status === 400 ? `${provider.name} rejected that key. Check that you copied all of it.` : error.message === "none" ? `${provider.name} lists no model this key can use.` : `Couldn't reach ${provider.name}. Check the connection and try again.`;
+      setupNote.textContent = why;
+      if (setupBox.hidden) print(why, "warn");
+      return false;
+    }
+  };
+  setupBox.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (setupKey.value.trim()) connectKey(setupKey.value);
+  });
+  setupSkip.addEventListener("click", () => {
+    localStorage.setItem(SETUP_KEY, "skipped");
+    hideSetup();
+    print("skipped. Run key any time to connect a model", "dim");
+    consoleInput.focus();
+  });
+  setupKey.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeConsole();
+    event.stopPropagation(); // Keys typed here are not commands or game controls.
+  });
+  // Ask on opening only when nothing can answer plain words and the question wasn't skipped.
+  let setupChecked = false;
+  const maybeSetup = async (focus) => {
+    if (setupChecked) return;
+    setupChecked = true;
+    if (savedKey() || localStorage.getItem(SETUP_KEY) === "skipped") return;
+    try {
+      await installedModels();
+    } catch {
+      showSetup(focus);
+    }
   };
 
   // Where the console sits and how big, remembered between sessions.
@@ -2637,6 +2830,7 @@
     placeConsole();
     if (!consoleOut.childElementCount) print("Commands run on your Liked Songs. help lists them, or say what you want in plain words. Esc closes this.", "dim");
     if (focus) consoleInput.focus();
+    maybeSetup(focus);
   };
 
   const closeConsole = () => {

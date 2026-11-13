@@ -1013,6 +1013,69 @@ html.tty-resizing .tty-queue-grip {
   background: linear-gradient(var(--tty-line), var(--tty-line)) left / 2px 100% no-repeat;
 }
 
+/* First open: the box that asks for an API key. */
+.tty-console-setup {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  box-shadow: inset 0 0 0 1px var(--spice-subtext);
+}
+
+.tty-console-setup[hidden] {
+  display: none;
+}
+
+.tty-console-setup-text {
+  color: var(--spice-subtext);
+}
+
+.tty-console-setup-row {
+  display: flex;
+  gap: 1.5ch;
+  align-items: center;
+}
+
+.tty-console-keyfield {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px 8px;
+  border: 0;
+  outline: 0;
+  background: rgba(var(--spice-rgb-button), 0.1);
+  box-shadow: inset 0 0 0 1px var(--tty-line);
+  font: inherit;
+  color: var(--spice-text);
+  caret-color: var(--tty-line);
+}
+
+.tty-console-setup .tty-console-button {
+  background: transparent;
+  color: var(--spice-text);
+}
+
+.tty-console-setup-note {
+  color: #e0a040;
+}
+
+.tty-console-setup-note:empty {
+  display: none;
+}
+
+html.tty-spotify .tty-console-setup {
+  border-radius: 8px;
+  box-shadow: none;
+  background: var(--background-elevated-base, #1f1f1f);
+}
+
+html.tty-spotify .tty-console-keyfield {
+  border-radius: 4px;
+  background: var(--background-base, #121212);
+  box-shadow: inset 0 0 0 1px var(--text-subdued, #b3b3b3);
+}
+
 .tty-console-out {
   flex: 1 1 auto;
   min-height: 0;
