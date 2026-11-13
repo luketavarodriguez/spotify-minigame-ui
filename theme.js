@@ -1970,6 +1970,18 @@
     return [...counts].map(([name, count]) => [name, tagNames[tagNumber.get(name)][1], count]).sort((a, b) => b[2] - a[2]);
   };
 
+  // The song a command is about: one named from Liked Songs, or the one playing.
+  const songNamed = (words, songs) => {
+    if (!words.length) {
+      const item = state().item;
+      return trackId(item?.uri) ? { uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", ") } : null;
+    }
+    // "mi combi by ollie bc": the title, then the artist. An exact title wins.
+    const [title, artist] = words.join(" ").split(/ by /);
+    const fits = (song) => !artist || song.artists.toLowerCase().includes(artist);
+    return songs.find((song) => song.name.toLowerCase() === title && fits(song)) ?? songs.find((song) => song.name.toLowerCase().includes(title) && fits(song)) ?? songs.find((song) => words.every((word) => `${song.name} ${song.artists}`.toLowerCase().includes(word))) ?? null;
+  };
+
   // How far apart two tempos are, with half and double time folded together.
   const tempoApart = (a, b) => {
     const octaves = Math.abs(Math.log2(b / a)) % 1;
@@ -2062,6 +2074,8 @@
         ["top", "your most played songs this month"],
         ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
+        ["like", "liked songs that sound like this one, by genre and mood. like mix also matches key and tempo. Or name a song: like mi combi"],
+        ["radio", "new songs like this one from all of Spotify, not in your Liked Songs. Also: radio mix"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
         ["play 2", "play one from the last list now"],
         ["play all", "play the whole list now, in place of what you had queued"],
@@ -2222,6 +2236,82 @@
       print(songs.length ? `${songs.length} liked songs ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs ${what}`, songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
       resultsName = `${step ? `A step ${args[0].toLowerCase()} than` : "Mixes with"} ${item.name}`;
+    },
+
+    // like: Liked Songs that sound like a song, by the genres and moods they share.
+    // "mix" alone only matches key and tempo, which pairs a latin house track
+    // with an indie one. like mix asks for both.
+    async like(args) {
+      const words = args.map((arg) => arg.toLowerCase());
+      const mixToo = words.includes("mix");
+      const liked = await likedSongs();
+      const from = songNamed(words.filter((word) => word !== "mix"), liked);
+      if (!from) {
+        print(words.length > (mixToo ? 1 : 0) ? "no liked song by that name. Try the title alone, or play it and run like" : "nothing is playing", "dim");
+        return;
+      }
+      const mine = tagsOf(from.uri);
+      if (!mine.some((tag) => tag.kind === "g")) {
+        print(`Spotify has no genre tags for ${from.name}`, "dim");
+        return;
+      }
+      // Shared tags count by the weaker of the two weights. Genres count double moods.
+      const worth = (tag) => (tag.kind === "g" ? 1 : 0.5);
+      const most = mine.reduce((sum, tag) => sum + tag.weight * worth(tag), 0);
+      const facts = songFacts(from.uri);
+      const seen = new Set([`${from.name}|${from.artists}`.toLowerCase()]);
+      const songs = liked
+        .filter((song) => song.uri !== from.uri && (!mixToo || transition(facts, songFacts(song.uri)).grade === "clean"))
+        .map((song) => {
+          const theirs = new Map(tagsOf(song.uri).map((tag) => [tag.name, tag.weight]));
+          const shared = mine.filter((tag) => theirs.has(tag.name));
+          return { song, genres: shared.filter((tag) => tag.kind === "g").length, score: shared.reduce((sum, tag) => sum + Math.min(tag.weight, theirs.get(tag.name)) * worth(tag), 0) / most };
+        })
+        .filter((entry) => entry.genres > 0 && entry.score >= 0.35)
+        .sort((a, b) => b.score - a.score)
+        .map((entry) => entry.song)
+        .filter((song) => {
+          const name = `${song.name}|${song.artists}`.toLowerCase();
+          return !seen.has(name) && seen.add(name);
+        });
+      const sound = mine.filter((tag) => tag.kind === "g").slice(0, 4).map((tag) => tag.name).join(", ");
+      print(songs.length ? `${songs.length} liked songs sound like ${from.name} (${sound})${mixToo ? " and mix cleanly with it" : ""}${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs sound like ${from.name} (${sound})${mixToo ? " and also mix cleanly with it. Try like without mix" : ""}`, songs.length ? "" : "dim");
+      printSongs(songs.slice(0, 20));
+      resultsName = `Like ${from.name}`;
+    },
+
+    // radio: songs from Spotify's whole catalog that are like a song, leaving out
+    // the ones already in Liked Songs. Spotify picks them: this is its own song radio.
+    async radio(args) {
+      const words = args.map((arg) => arg.toLowerCase());
+      const mixToo = words.includes("mix");
+      const liked = await likedSongs();
+      const from = songNamed(words.filter((word) => word !== "mix"), liked);
+      if (!from) {
+        print(words.length > (mixToo ? 1 : 0) ? "no liked song by that name. Play the song and run radio, or use a title from your Liked Songs" : "nothing is playing", "dim");
+        return;
+      }
+      const res = await fetch(`https://spclient.wg.spotify.com/inspiredby-mix/v2/seed_to_playlist/${from.uri}?response-format=json`, {
+        headers: { Authorization: `Bearer ${S.Platform.AuthorizationAPI?.getState?.()?.token?.accessToken}` },
+      });
+      const station = res.ok ? (await res.json()).mediaItems?.[0]?.uri : null;
+      const found = station ? ((await S.Platform.PlaylistAPI.getContents(station, { limit: 100, offset: 0 })).items ?? []) : [];
+      const mine = new Set(liked.map((song) => song.uri));
+      let songs = found
+        .filter((item) => trackId(item.uri) && item.uri !== from.uri && !mine.has(item.uri))
+        .map((item) => ({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0 }));
+      if (!songs.length) {
+        print(found.length ? `Spotify's radio for ${from.name} is all songs you already like` : `Spotify has no radio for ${from.name}`, "dim");
+        return;
+      }
+      // Their tempos and keys arrive in a moment. Wait briefly so the list can show them.
+      wantSongs(songs.map((song) => song.uri), true);
+      for (let tries = 0; tries < 25 && songs.some((song) => !songFacts(song.uri) && !indexMisses.has(trackId(song.uri))); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      const all = songs.length;
+      if (mixToo) songs = songs.filter((song) => transition(songFacts(from.uri), songFacts(song.uri)).grade === "clean");
+      print(songs.length ? `${all} new songs from Spotify's radio for ${from.name}${mixToo ? `. ${songs.length} mix cleanly with it` : ""}${songs.length > 20 ? ", first 20:" : ":"}` : `${all} new songs on Spotify's radio for ${from.name}, but none mix cleanly with it. Try radio without mix`, songs.length ? "" : "dim");
+      printSongs(songs.slice(0, 20));
+      resultsName = `Radio: ${from.name}`;
     },
 
     async add(args) {
@@ -2409,7 +2499,9 @@
     "find <year>   list songs the user liked in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
     "top   list the user's most played songs this month. This is the only play count there is.",
     'A year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. Only "released", "came out" or a decade can\'t be done.',
-    "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
+    "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster. mix does not look at how songs sound.",
+    "like <song>   list Liked Songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
+    "radio <song>   list songs from Spotify's whole catalog that are like a song and are not in Liked Songs. Without a song it uses the playing one. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
     "set <minutes>m <shape> <genre>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
@@ -2423,9 +2515,10 @@
     "To search several genres or moods at once, join them with or: find psychedelic rock or reggae or dub. mix and set take the same form.",
     "A vibe, scene or type of person (stoner, hippie, beach day, late night drive, heartbreak) is never a reason to refuse. You know what music fits it. Pick the two to four closest names from the tag list, join them with or, and say which you chose.",
     "Occasions work as search words too: party, workout, gym, running, hype, driving, study, focus, work, sleep, relax, dinner. Pass the occasion word itself, for example: find party.",
+    'Words such as like, similar to, more of this and in this style mean like, never mix alone. Use mix alone only when the user asks purely about mixing, blending or transitions. New, discover, recommend, or something I have not heard mean radio.',
     "Never answer a question about the playing song from memory. Use now.",
     "A new request needs a new list. Use play <number> or add on the last list only when the user is plainly talking about that list (play the third one, add those).",
-    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, lyrics, or anything outside Liked Songs. Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
+    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, lyrics, or searching Spotify's catalog by name (radio is the only reach outside Liked Songs). Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
@@ -2442,7 +2535,12 @@
     'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you liked in 2020.", "commands": ["find chill 2020"]}',
     'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you liked in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
     'Request: play something released in the 90s -> {"say": "I can\'t tell when a song was released, only when you liked it. Tell me a genre or a mood and I will play that.", "commands": []}',
-    'Request: recommend me something new -> {"say": "I can only reach your Liked Songs, so I can\'t find new music. Want something you liked years ago, such as songs from 2018?", "commands": []}',
+    'Request: play songs like this -> {"say": "Playing liked songs that sound like this one.", "commands": ["like", "play all"]}',
+    'Request: play songs like Mi Combi by Ollie BC that mix well with it -> {"say": "Playing liked songs that sound like Mi Combi and mix cleanly with it.", "commands": ["like mi combi mix", "play all"]}',
+    'Request: find songs like Mi Combi that mix well with it -> {"say": "Here are liked songs that sound like Mi Combi and mix cleanly with it. Want me to play them?", "commands": ["like mi combi mix"]}',
+    'Request: what mixes with this -> {"say": "Here are liked songs in a matching key and tempo.", "commands": ["mix"]}',
+    'Request: recommend me something new -> {"say": "Here are new songs like the one playing, from Spotify\'s radio. Want me to play them?", "commands": ["radio"]}',
+    'Request: play me new music like this that will mix well -> {"say": "Playing new songs like this one that mix cleanly with it.", "commands": ["radio mix", "play all"]}',
     'Request: play the song that goes na na na -> {"say": "I can\'t search lyrics. Tell me the title or the artist and I will find it.", "commands": []}',
     'Request: play something upbeat but not too fast -> {"say": "Playing upbeat songs between 95 and 118 BPM.", "commands": ["find upbeat 95-118bpm", "play all"]}',
     'Request: I am hosting a dinner, put something on -> {"say": "Playing dinner music from your Liked Songs: lounge, smooth and classy.", "commands": ["find dinner", "play all"]}',
@@ -2631,7 +2729,12 @@
       else print(`${model} didn't give a usable answer. Try again, or use a command (help)`, "warn");
       return;
     }
-    const lines = (Array.isArray(reply.commands) ? reply.commands : []).filter((command) => typeof command === "string" && command.trim()).slice(0, 4);
+    let lines = (Array.isArray(reply.commands) ? reply.commands : []).filter((command) => typeof command === "string" && command.trim()).slice(0, 4);
+    // Asked to find or show, not to play: a small model often plays anyway. Don't let it.
+    if (/^(find|show|list|search|look up|what|which)\b/i.test(line) && !/\b(play|put on|hear|listen|start|switch)\b/i.test(line) && lines.some((command) => /^play\b/i.test(command))) {
+      lines = lines.filter((command) => !/^play\b/i.test(command));
+      reply.say = String(reply.say ?? "").replace(/^(Playing|Switching to)\b/i, "Here are");
+    }
     chat.push({ role: "user", content: `Request: ${line}` }, { role: "assistant", content: JSON.stringify({ say: reply.say ?? "", commands: lines }) });
     if (chat.length > 12) chat.splice(0, chat.length - 12);
     if (reply.say) print(reply.say, "say");
