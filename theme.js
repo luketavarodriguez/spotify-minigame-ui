@@ -1838,6 +1838,23 @@
   // kin: "techno" matches songs tagged "minimal techno". Words that name no
   // tag are left to match titles and artists. An artist's exact name is never
   // read as tags, so "beach house" finds the band.
+  //
+  // Occasions aren't tags, but they point at some: "party" means songs tagged
+  // club, dance or pump up. Only the tags this library has are used.
+  const OCCASIONS = {
+    party: ["club", "dance", "pump up"],
+    workout: ["pump up", "energetic"],
+    gym: ["pump up", "energetic"],
+    running: ["pump up", "energetic"],
+    hype: ["pump up", "aggressive"],
+    driving: ["upbeat", "energetic"],
+    study: ["calm", "chill"],
+    focus: ["calm", "chill"],
+    work: ["calm", "chill"],
+    sleep: ["tranquil", "soothing", "peaceful"],
+    relax: ["relaxing", "mellow"],
+    dinner: ["lounge", "smooth", "classy"],
+  };
   const readTags = (words, songs) => {
     const phrase = words.join(" ");
     if (!words.length || songs.some((song) => song.artists.toLowerCase().split(", ").includes(phrase))) return { tags: [], rest: words };
@@ -1849,10 +1866,12 @@
       if (size) {
         const name = words.slice(i, i + size).join(" ");
         const kin = new RegExp(`(^| )${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( |$)`);
-        tags.push({ name, numbers: new Set(tagNames.flatMap((tag, number) => (kin.test(tag[0]) ? [number] : []))) });
+        tags.push({ name, word: name, numbers: new Set(tagNames.flatMap((tag, number) => (kin.test(tag[0]) ? [number] : []))) });
         i += size;
       } else {
-        rest.push(words[i]);
+        const stands = (OCCASIONS[words[i]] ?? []).filter((tag) => tagNumber.has(tag));
+        if (stands.length) tags.push({ name: `${words[i]} (${stands.join(", ").replace(/, ([^,]*)$/, " or $1")})`, word: words[i], numbers: new Set(stands.map((tag) => tagNumber.get(tag))) });
+        else rest.push(words[i]);
         i += 1;
       }
     }
@@ -1958,6 +1977,7 @@
         ["find deep house", "liked songs by genre or mood. Mix in a tempo, key or name: find techno 130-140bpm"],
         ["find 124bpm 8A", "liked songs near a tempo, in a key"],
         ["genres", "the genres and moods in your Liked Songs"],
+        ["find party", "occasions work too: party, workout, study, sleep, relax, dinner"],
         ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
@@ -2032,7 +2052,7 @@
           if (near && tempoApart(near, facts[0]) > 0.03) return false;
           if (high && (facts[0] < low || facts[0] > high)) return false;
           if (key && facts[1] !== key) return false;
-          if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].name)))) return false;
+          if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].word)))) return false;
           return rest.every((word) => text.includes(word));
         })
         .map((entry) => ({ ...entry, strength: entry.weights.reduce((sum, weight) => sum + weight, 0) }));
@@ -2254,6 +2274,7 @@
     "Use only these commands, at most 4, in the order they should run. A list command (find, mix, set) must come before play, add or save, unless the user means the list already in the console.",
     'When the user asks to play, hear, put on or switch to something, finish with "play all". When they ask to queue or add, use add. When they only ask to find or see songs, just list them.',
     "For a genre or mood, use the closest names from the tag list. Use one or two tags, never more. If the user asks for a style that is not in the list, use its nearest tag and add a tempo range that fits it (hard techno: techno 140-160bpm). If nothing in the list is close, do not refuse: run find with the user's own word, which also matches titles and artists.",
+    "Occasions work as search words too: party, workout, gym, running, hype, driving, study, focus, work, sleep, relax, dinner. Pass the occasion word itself, for example: find party.",
     "Never answer a question about the playing song from memory. Use now.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
@@ -2266,6 +2287,7 @@
     'Request: play some hard techno -> {"say": "Playing your fastest techno, 140 to 160 BPM. Want these saved as a playlist?", "commands": ["find techno 140-160bpm", "play all"]}',
     'Request: play some reggae -> {"say": "Reggae is not one of your tags, so I am searching the word.", "commands": ["find reggae", "play all"]}',
     'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
+    'Request: play some music I can party to -> {"say": "Playing party music from your Liked Songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
     'Request: something chill to work to -> {"say": "Playing chill songs from your Liked Songs.", "commands": ["find chill", "play all"]}',
     'Request: play something like this but slower -> {"say": "Switching to slower songs in a matching key. Want these saved as a playlist?", "commands": ["mix slower", "play all"]}',
     'Request: yes, call it warehouse -> {"say": "Saving it as warehouse.", "commands": ["save warehouse"]}',
