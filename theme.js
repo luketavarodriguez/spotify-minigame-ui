@@ -1855,7 +1855,17 @@
     relax: ["relaxing", "mellow"],
     dinner: ["lounge", "smooth", "classy"],
   };
+  //
+  // "psychedelic rock or reggae or dub" is one choice: a song fits if it
+  // carries any of them. That is how a vibe that spans genres is searched.
   const readTags = (words, songs) => {
+    if (words.includes("or")) {
+      const choices = words.join(" ").split(/\s+or\s+|^or\s+|\s+or$/).filter(Boolean).map((choice) => readTags(choice.split(" "), songs)).filter((choice) => choice.tags.length && !choice.rest.length);
+      if (choices.length) {
+        const tags = choices.flatMap((choice) => choice.tags);
+        return { tags: [{ name: tags.map((tag) => tag.name).join(" or "), word: words.join(" "), numbers: new Set(tags.flatMap((tag) => [...tag.numbers])) }], rest: [] };
+      }
+    }
     const phrase = words.join(" ");
     if (!words.length || songs.some((song) => song.artists.toLowerCase().split(", ").includes(phrase))) return { tags: [], rest: words };
     const tags = [];
@@ -1877,6 +1887,42 @@
     }
     return { tags, rest };
   };
+  // A word that is neither a tag nor an occasion, like "beach" or "villain"
+  // or a genre this library lacks, goes to the local model with one small
+  // question: which two to four of this library's tags fit it? The answer
+  // works as one choice, like "chill or mellow". Null without a model.
+  const vibes = new Map();
+  const vibeTags = async (vibe, songs) => {
+    if (vibes.has(vibe)) return vibes.get(vibe);
+    try {
+      const model = await chosenModel();
+      if (!model) return null;
+      const names = commonTags(songs).filter((tag) => tag[1] !== "o" && tag[2] >= 5).slice(0, 180).map((tag) => tag[0]);
+      const res = await fetch(`${ollama}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({
+          model,
+          stream: false,
+          think: false,
+          format: { type: "object", properties: { tags: { type: "array", items: { type: "string" } } }, required: ["tags"] },
+          options: { temperature: 0, num_ctx: 8192 },
+          messages: [
+            { role: "system", content: "You match a vibe, scene, occasion or music style to tags. From the tag list, choose the two to four tags whose music fits it best, copied exactly. For a genre that is not in the list, choose the nearest genres that are. Prefer specific tags over broad ones like electronic. If the text is not a vibe, scene, occasion or music style (a misspelled name, a person, nonsense), answer with an empty list. Answer with JSON only." },
+            { role: "user", content: `Tag list: ${names.join(", ")}.\nMatch this: ${vibe}` },
+          ],
+        }),
+      });
+      const picked = [...new Set((JSON.parse((await res.json()).message.content).tags ?? []).map((tag) => String(tag).toLowerCase()).filter((tag) => names.includes(tag)))].slice(0, 4);
+      const tag = picked.length ? { name: `${vibe} (${picked.join(", ").replace(/, ([^,]*)$/, " or $1")})`, word: vibe, numbers: new Set(picked.map((name) => tagNumber.get(name))) } : null;
+      vibes.set(vibe, tag);
+      return tag;
+    } catch {
+      return null;
+    }
+  };
+
   // How strongly a song carries a tag, 0 to 1.
   const tagWeight = (uri, tag) => {
     const pairs = songTags.get(trackId(uri)) ?? [];
@@ -1978,6 +2024,7 @@
         ["find 124bpm 8A", "liked songs near a tempo, in a key"],
         ["genres", "the genres and moods in your Liked Songs"],
         ["find party", "occasions work too: party, workout, study, sleep, relax, dinner"],
+        ["find reggae or dub", "any of several genres or moods"],
         ["find 2018", "songs you liked that year. Mix it in: find house 2018"],
         ["top", "your most played songs this month"],
         ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
@@ -2061,10 +2108,10 @@
       // "find me some sad indie" is a sentence, not a search for the words "me" and "some".
       if (words.some((word) => ["me", "some", "any", "songs", "tracks", "music", "something", "stuff", "please", "around"].includes(word))) return ASK;
       const liked = await likedSongs();
-      const { tags, rest } = readTags(words, liked);
+      let { tags, rest } = readTags(words, liked);
       // A lone word can be a genre or part of a name, so it matches either. Tagged songs come first.
       const loose = tags.length === 1 && !rest.length && !near && !high && !key;
-      const songs = liked
+      const search = (extra) => liked
         .map((song) => ({ song, year: song.year, facts: songFacts(song.uri), text: `${song.name} ${song.artists}`.toLowerCase(), weights: tags.map((tag) => tagWeight(song.uri, tag)) }))
         .filter(({ song, facts, text, weights }) => {
           if ((near || high || key) && !facts) return false;
@@ -2073,10 +2120,26 @@
           if (key && facts[1] !== key) return false;
           if (year && song.year !== year) return false;
           if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].word)))) return false;
-          return rest.every((word) => text.includes(word));
+          return extra.every((word) => text.includes(word));
         })
         .map((entry) => ({ ...entry, strength: entry.weights.reduce((sum, weight) => sum + weight, 0) }));
-      if (!songs.length && (rest.length > 1 || (tags.length && rest.length))) return ASK;
+      let songs = search(rest);
+      // "skater punk": punk is a genre here and skater matches nothing. Keep the genre, drop the word, and say so.
+      if (!songs.length && tags.length && rest.length) {
+        songs = search([]);
+        if (songs.length) print(`nothing matches "${rest.join(" ")}", so this is ${tags.map((tag) => tag.name).join(" and ")} alone`, "dim");
+      }
+      if (!songs.length && rest.length > 1) return ASK;
+      // One word that is no name and no tag: "bluegrass", "beach". Ask which tags are nearest.
+      if (!songs.length && rest.length === 1) {
+        const vibe = await vibeTags(rest[0], liked);
+        if (vibe) {
+          print(`"${rest[0]}" is not a name or a tag in your Liked Songs. The nearest tags, picked by the model, are ${vibe.name.replace(/^.*\((.*)\)$/, "$1")}`, "dim");
+          tags = [vibe];
+          rest = [];
+          songs = search([]);
+        }
+      }
       // Order: nearest the tempo, or up a tempo range, or by how strongly the tags fit.
       // A genre with many matches is shuffled a little, so it isn't the same 20 every time.
       if (near) songs.sort((a, b) => tempoApart(near, a.facts[0]) - tempoApart(near, b.facts[0]));
@@ -2104,7 +2167,11 @@
       const liked = await likedSongs();
       // Anything after that must name genres or moods: mix techno, mix slower chill.
       const { tags, rest } = readTags(args.slice(step ? 1 : 0).map((arg) => arg.toLowerCase()), liked);
-      if (rest.length) return ASK;
+      if (rest.length) {
+        const vibe = await vibeTags(rest.join(" "), liked);
+        if (!vibe) return ASK;
+        tags.push(vibe);
+      }
       const shift = (facts) => {
         const octaves = Math.log2(facts[0] / from[0]);
         return 2 ** (octaves - Math.round(octaves)) - 1;
@@ -2184,7 +2251,11 @@
       const liked = await likedSongs();
       // Words that aren't the length or the shape must name genres or moods: set 60m peak house.
       const { tags, rest } = readTags(args.filter((arg) => !/^\d{1,3}m?$/i.test(arg) && !SHAPES[arg.toLowerCase()]).map((arg) => arg.toLowerCase()), liked);
-      if (rest.length) return ASK;
+      if (rest.length) {
+        const vibe = await vibeTags(rest.join(" "), liked);
+        if (!vibe) return ASK;
+        tags.push(vibe);
+      }
       const minutes = Math.min(240, Math.max(10, Number((/^(\d{1,3})m?$/i.exec(args.find((arg) => /^\d/.test(arg)) ?? "") ?? [])[1] ?? 60)));
       const shape = args.map((arg) => arg.toLowerCase()).find((arg) => SHAPES[arg]) ?? "peak";
       const item = state().item;
@@ -2285,6 +2356,7 @@
     "find <genre or mood> <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
     "find <year>   list songs the user liked in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
     "top   list the user's most played songs this month. This is the only play count there is.",
+    'A year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. Only "released", "came out" or a decade can\'t be done.',
     "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
     "set <minutes>m <shape> <genre>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
@@ -2296,6 +2368,8 @@
     "Use only these commands, at most 4, in the order they should run. A list command (find, mix, set) must come before play, add or save, unless the user means the list already in the console.",
     'When the user asks to play, hear, put on or switch to something, finish with "play all". When they ask to queue or add, use add. When they only ask to find or see songs, just list them.',
     "For a genre or mood, use the closest names from the tag list. Use one or two tags, never more. If the user asks for a style that is not in the list, use its nearest tag and add a tempo range that fits it (hard techno: techno 140-160bpm). If nothing in the list is close, do not refuse: run find with the user's own word, which also matches titles and artists.",
+    "To search several genres or moods at once, join them with or: find psychedelic rock or reggae or dub. mix and set take the same form.",
+    "A vibe, scene or type of person (stoner, hippie, beach day, late night drive, heartbreak) is never a reason to refuse. You know what music fits it. Pick the two to four closest names from the tag list, join them with or, and say which you chose.",
     "Occasions work as search words too: party, workout, gym, running, hype, driving, study, focus, work, sleep, relax, dinner. Pass the occasion word itself, for example: find party.",
     "Never answer a question about the playing song from memory. Use now.",
     "A new request needs a new list. Use play <number> or add on the last list only when the user is plainly talking about that list (play the third one, add those).",
@@ -2304,7 +2378,7 @@
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
     "If the request can't be done with these commands, give no commands and say so.",
-    "Examples (they assume the tag list has house, techno, jazz, chill and hip hop):",
+    "Examples (they assume these names are in the tag list; only ever use names that are):",
     'Request: queue 3 songs that mix with this -> {"say": "Queueing three songs that mix with it.", "commands": ["mix", "add 1 2 3"]}',
     'Request: queue a few techno tracks that mix with this -> {"say": "Queueing techno that mixes with it.", "commands": ["mix techno", "add 1 2 3"]}',
     'Request: play some jazz -> {"say": "Playing jazz from your Liked Songs. Want these saved as a playlist?", "commands": ["find jazz", "play all"]}',
@@ -2312,6 +2386,7 @@
     'Request: play some reggae -> {"say": "Reggae is not one of your tags, so I am searching the word.", "commands": ["find reggae", "play all"]}',
     'Request: play one of my favorite songs from 2018 -> {"say": "I can\'t tell which songs are your favorites. Here are songs you liked in 2018, and I am playing one.", "commands": ["find 2018", "play 1"]}',
     'Request: play the best song ever -> {"say": "I can\'t judge that. Here are your most played songs this month, and I am playing the top one.", "commands": ["top", "play 1"]}',
+    'Request: queue 5 hip hop songs from 2019 -> {"say": "Queueing five hip hop songs you liked in 2019.", "commands": ["find hip hop 2019", "add 1 2 3 4 5"]}',
     'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you liked in 2020.", "commands": ["find chill 2020"]}',
     'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you liked in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
     'Request: play something released in the 90s -> {"say": "I can\'t tell when a song was released, only when you liked it. Tell me a genre or a mood and I will play that.", "commands": []}',
@@ -2322,6 +2397,11 @@
     'Request: what have I been listening to most -> {"say": "Here are your most played songs this month.", "commands": ["top"]}',
     'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
     'Request: play some music I can party to -> {"say": "Playing party music from your Liked Songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
+    'Request: play some stoner music -> {"say": "Playing stoner music from your Liked Songs: psychedelic rock, reggae, dub and trip hop.", "commands": ["find psychedelic rock or reggae or dub or trip hop", "play all"]}',
+    'Request: play some hippie music -> {"say": "Playing hippie music from your Liked Songs: folk rock, psychedelic rock and classic rock.", "commands": ["find folk rock or psychedelic rock or classic rock", "play all"]}',
+    'Request: an hour set of stoner music that builds -> {"say": "Here is a one hour set of psychedelic rock, reggae and dub that builds. Want me to play it or save it?", "commands": ["set 60m up psychedelic rock or reggae or dub"]}',
+    'Request: play some polka -> {"say": "Polka is not one of your tags, so I am searching the word.", "commands": ["find polka", "play all"]}',
+    'Request: something for a rainy day -> {"say": "Playing rainy day music: melancholy, mellow and cozy.", "commands": ["find melancholy or mellow or cozy", "play all"]}',
     'Request: something chill to work to -> {"say": "Playing chill songs from your Liked Songs.", "commands": ["find chill", "play all"]}',
     'Request: play something like this but slower -> {"say": "Switching to slower songs in a matching key. Want these saved as a playlist?", "commands": ["mix slower", "play all"]}',
     'Request: yes, call it warehouse -> {"say": "Saving it as warehouse.", "commands": ["save warehouse"]}',
@@ -2396,8 +2476,13 @@
       }
       reply = JSON.parse((await res.json()).message.content);
       // Small models sometimes announce an action and forget its command. Ask once more.
-      if (!(reply.commands ?? []).length && /\b(sav|play|queu|add|switch|smooth)(ed|ing)\b/i.test(reply.say ?? "")) {
-        body.messages.push({ role: "assistant", content: JSON.stringify(reply) }, { role: "user", content: "You gave no commands, so nothing happened. Answer again with the commands for what you just said." });
+      const claimed = /\b(sav|play|queu|add|switch|smooth)(ed|ing)\b/i.test(reply.say ?? "");
+      const gaveUp = /can't find|cannot find|not (one of|in) your tags|another genre/i.test(reply.say ?? "");
+      if (!(reply.commands ?? []).length && (claimed || gaveUp)) {
+        const nudge = claimed
+          ? "You gave no commands, so nothing happened. Answer again with the commands for what you just said."
+          : "Don't stop there. If the request is a vibe or a scene, pick the two to four names from the tag list that fit it, join them with or in a find command, and say which you chose. If it is one specific genre the list doesn't have, run find with the user's own word.";
+        body.messages.push({ role: "assistant", content: JSON.stringify(reply) }, { role: "user", content: nudge });
         const again = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
         if (again.ok) reply = JSON.parse((await again.json()).message.content);
       }
