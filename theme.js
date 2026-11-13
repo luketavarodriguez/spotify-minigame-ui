@@ -1280,6 +1280,10 @@
   // asks the same way: a few hundred songs per request. Answers are kept in
   // localStorage, so each song is only asked about once. The up-next pane
   // asks first; Liked Songs fill in behind it, a batch every 1.5 seconds.
+  //
+  // The same request brings each song's tags: Spotify's own genre and mood
+  // labels, each with a weight, like "house 0.94" or "chill 0.53". They are
+  // what lets the console search by genre.
 
   const INDEX_KEY = "tty-song-index-v1";
   const AUDIO_ATTRIBUTES = 222; // Spotify's number for the BPM-and-key record.
@@ -1288,6 +1292,20 @@
     for (const [id, facts] of Object.entries(JSON.parse(localStorage.getItem(INDEX_KEY) ?? "{}"))) songIndex.set(id, facts);
   } catch {}
   const indexMisses = new Set(); // Songs Spotify has no numbers for. Asked again next session.
+
+  const DESCRIPTORS = 6; // Spotify's number for a song's genre and mood tags.
+  const TAGS_KEY = "tty-song-tags-v1";
+  const tagNames = []; // Every tag seen, as [name, kind]: "g" a genre, "m" a mood, "o" anything else.
+  const tagNumber = new Map(); // name -> its place in tagNames
+  const songTags = new Map(); // track id -> [tag number, weight 0-100, tag number, weight, ...], strongest first
+  try {
+    const saved = JSON.parse(localStorage.getItem(TAGS_KEY) ?? "{}");
+    for (const entry of saved.names ?? []) {
+      tagNumber.set(entry[0], tagNames.length);
+      tagNames.push(entry);
+    }
+    for (const [id, tags] of Object.entries(saved.songs ?? {})) songTags.set(id, tags);
+  } catch {}
   const wantedNow = new Set();
   const wantedLater = new Set();
   let indexBusy = false;
@@ -1331,16 +1349,21 @@
         const length = varint();
         fields.push([num, buf.subarray(p, p + length)]);
         p += length;
-      } else if (type === 5) p += 4;
-      else break;
+      } else if (type === 5) {
+        fields.push([num, new DataView(buf.buffer, buf.byteOffset + p, 4).getFloat32(0, true)]);
+        p += 4;
+      } else break;
     }
     return fields;
   };
   const pbAll = (fields, num) => fields.filter(([n]) => n === num).map(([, value]) => value);
   const pbString = (bytes) => (bytes ? new TextDecoder().decode(bytes) : "");
 
-  const fetchSongFacts = async (ids) => {
-    const body = new Uint8Array(ids.flatMap((id) => pbField(2, [...pbText(1, `spotify:track:${id}`), ...pbField(2, [8, ...pbVarint(AUDIO_ATTRIBUTES)])])));
+  // Tempo and key, and tags, for a batch of songs. Returns { facts, tags }, each a Map by track id.
+  const fetchSongRecords = async (ids) => {
+    const body = new Uint8Array(
+      ids.flatMap((id) => pbField(2, [...pbText(1, `spotify:track:${id}`), ...pbField(2, [8, ...pbVarint(AUDIO_ATTRIBUTES)]), ...pbField(2, [8, ...pbVarint(DESCRIPTORS)])])),
+    );
     const res = await fetch("https://spclient.wg.spotify.com/extended-metadata/v0/extended-metadata", {
       method: "POST",
       headers: {
@@ -1349,32 +1372,57 @@
       },
       body,
     });
-    if (!res.ok) throw new Error(`song facts: ${res.status}`);
-    const found = new Map();
+    if (!res.ok) throw new Error(`song records: ${res.status}`);
+    const facts = new Map();
+    const tags = new Map();
     // Reply > one list per kind of record > one entry per song > the record, wrapped.
-    for (const kind of pbAll(pbRead(new Uint8Array(await res.arrayBuffer())), 2)) {
-      for (const entry of pbAll(pbRead(kind), 3)) {
-        const fields = pbRead(entry);
-        const id = pbString(pbAll(fields, 2)[0]).split(":").pop();
-        const wrapped = pbAll(fields, 3)[0];
+    for (const list of pbAll(pbRead(new Uint8Array(await res.arrayBuffer())), 2)) {
+      const fields = pbRead(list);
+      const kind = pbAll(fields, 2)[0];
+      for (const entry of pbAll(fields, 3)) {
+        const parts = pbRead(entry);
+        const id = pbString(pbAll(parts, 2)[0]).split(":").pop();
+        const wrapped = pbAll(parts, 3)[0];
         const record = wrapped && pbAll(pbRead(wrapped), 2)[0];
         if (!id || !record) continue;
-        const attributes = pbRead(record);
-        const bpm = pbAll(attributes, 1)[0] ?? 0;
-        const key = pbAll(attributes, 2)[0];
-        const camelot = key && pbAll(pbRead(key), 3)[0];
-        const wheel = camelot ? pbString(pbAll(pbRead(camelot), 1)[0]) : "";
-        if (bpm > 0 || wheel) found.set(id, [Math.round(bpm * 10) / 10, wheel]);
+        if (kind === AUDIO_ATTRIBUTES) {
+          const attributes = pbRead(record);
+          const bpm = pbAll(attributes, 1)[0] ?? 0;
+          const key = pbAll(attributes, 2)[0];
+          const camelot = key && pbAll(pbRead(key), 3)[0];
+          const wheel = camelot ? pbString(pbAll(pbRead(camelot), 1)[0]) : "";
+          if (bpm > 0 || wheel) facts.set(id, [Math.round(bpm * 10) / 10, wheel]);
+        } else if (kind === DESCRIPTORS) {
+          // Each tag: its name, a weight from 0 to 1, and what sort of tag it is (1 a genre, 2 a mood).
+          const found = pbAll(pbRead(record), 1).map((raw) => {
+            const tag = pbRead(raw);
+            const sorts = pbAll(tag, 3).flatMap((sort) => (sort instanceof Uint8Array ? [...sort] : [sort]));
+            return { name: pbString(pbAll(tag, 1)[0]).toLowerCase(), weight: pbAll(tag, 2)[0] ?? 0, kind: sorts.includes(1) ? "g" : sorts.includes(2) ? "m" : "o" };
+          });
+          const kept = found.filter((tag) => tag.name && tag.weight >= 0.45).sort((a, b) => b.weight - a.weight).slice(0, 10);
+          tags.set(
+            id,
+            kept.flatMap((tag) => {
+              if (!tagNumber.has(tag.name)) {
+                tagNumber.set(tag.name, tagNames.length);
+                tagNames.push([tag.name, tag.kind]);
+              }
+              return [tagNumber.get(tag.name), Math.round(tag.weight * 100)];
+            }),
+          );
+        }
       }
     }
-    return found;
+    return { facts, tags };
   };
 
   const saveIndex = () => {
     // Past 30,000 songs, the oldest entries go first.
     if (songIndex.size > 30000) for (const id of [...songIndex.keys()].slice(0, songIndex.size - 25000)) songIndex.delete(id);
+    for (const id of songTags.keys()) if (!songIndex.has(id) && songTags.size > 30000) songTags.delete(id);
     try {
       localStorage.setItem(INDEX_KEY, JSON.stringify(Object.fromEntries(songIndex)));
+      localStorage.setItem(TAGS_KEY, JSON.stringify({ names: tagNames, songs: Object.fromEntries(songTags) }));
     } catch {}
   };
 
@@ -1383,12 +1431,13 @@
     indexBusy = true;
     const ids = [...wantedNow, ...wantedLater].slice(0, 200);
     try {
-      const found = await fetchSongFacts(ids);
+      const found = await fetchSongRecords(ids);
       for (const id of ids) {
         wantedNow.delete(id);
         wantedLater.delete(id);
-        if (found.has(id)) songIndex.set(id, found.get(id));
-        else indexMisses.add(id);
+        if (found.facts.has(id)) songIndex.set(id, found.facts.get(id));
+        else if (!songIndex.has(id)) indexMisses.add(id);
+        songTags.set(id, found.tags.get(id) ?? []);
       }
       saveIndex();
       indexDelay = 1500;
@@ -1402,12 +1451,19 @@
 
   const trackId = (uri) => (/^spotify:track:([A-Za-z0-9]{22})$/.exec(uri ?? "") ?? [])[1];
   const songFacts = (uri) => songIndex.get(trackId(uri));
+  // A song's tags, strongest first: [{ name: "house", kind: "g", weight: 0.94 }, ...]
+  const tagsOf = (uri) => {
+    const pairs = songTags.get(trackId(uri)) ?? [];
+    const tags = [];
+    for (let i = 0; i < pairs.length; i += 2) tags.push({ name: tagNames[pairs[i]][0], kind: tagNames[pairs[i]][1], weight: pairs[i + 1] / 100 });
+    return tags;
+  };
 
   const wantSongs = (uris, now) => {
     let added = false;
     for (const uri of uris) {
       const id = trackId(uri);
-      if (!id || songIndex.has(id) || indexMisses.has(id)) continue;
+      if (!id || (songIndex.has(id) && songTags.has(id)) || indexMisses.has(id)) continue;
       const wanted = now ? wantedNow : wantedLater;
       if (!wanted.has(id)) added = true;
       wanted.add(id);
@@ -1772,9 +1828,48 @@
   // Liked Songs, with a note while their tempos and keys are still arriving.
   const likedSongs = async () => {
     const songs = await loadLibrary();
-    const ready = songs.filter((song) => songFacts(song.uri)).length;
+    const ready = songs.filter((song) => songFacts(song.uri) && songTags.has(trackId(song.uri))).length;
     if (ready < songs.length * 0.95) print(`still indexing Liked Songs: ${ready} of ${songs.length} ready. Results are partial for the next minute.`, "dim");
     return songs;
+  };
+
+  // Which of the words name a genre or mood? The longest phrase wins, so
+  // "deep house" is one tag, not "deep" and "house". A tag also covers its
+  // kin: "techno" matches songs tagged "minimal techno". Words that name no
+  // tag are left to match titles and artists. An artist's exact name is never
+  // read as tags, so "beach house" finds the band.
+  const readTags = (words, songs) => {
+    const phrase = words.join(" ");
+    if (!words.length || songs.some((song) => song.artists.toLowerCase().split(", ").includes(phrase))) return { tags: [], rest: words };
+    const tags = [];
+    const rest = [];
+    for (let i = 0; i < words.length; ) {
+      let size = 0;
+      for (let n = Math.min(4, words.length - i); n > 0 && !size; n -= 1) if (tagNumber.has(words.slice(i, i + n).join(" "))) size = n;
+      if (size) {
+        const name = words.slice(i, i + size).join(" ");
+        const kin = new RegExp(`(^| )${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( |$)`);
+        tags.push({ name, numbers: new Set(tagNames.flatMap((tag, number) => (kin.test(tag[0]) ? [number] : []))) });
+        i += size;
+      } else {
+        rest.push(words[i]);
+        i += 1;
+      }
+    }
+    return { tags, rest };
+  };
+  // How strongly a song carries a tag, 0 to 1.
+  const tagWeight = (uri, tag) => {
+    const pairs = songTags.get(trackId(uri)) ?? [];
+    let best = 0;
+    for (let i = 0; i < pairs.length; i += 2) if (tag.numbers.has(pairs[i]) && pairs[i + 1] > best) best = pairs[i + 1];
+    return best / 100;
+  };
+  // The commonest tags across Liked Songs: [[name, kind, songs], ...]
+  const commonTags = (songs) => {
+    const counts = new Map();
+    for (const song of songs) for (const tag of tagsOf(song.uri)) if (tag.weight >= 0.5) counts.set(tag.name, (counts.get(tag.name) ?? 0) + 1);
+    return [...counts].map(([name, count]) => [name, tagNames[tagNumber.get(name)][1], count]).sort((a, b) => b[2] - a[2]);
   };
 
   // How far apart two tempos are, with half and double time folded together.
@@ -1860,15 +1955,16 @@
   const commands = {
     help() {
       for (const [command, does] of [
+        ["find deep house", "liked songs by genre or mood. Mix in a tempo, key or name: find techno 130-140bpm"],
         ["find 124bpm 8A", "liked songs near a tempo, in a key"],
-        ["find 120-128bpm", "a tempo range. Add words to match names"],
-        ["mix", "liked songs that mix cleanly with this one"],
+        ["genres", "the genres and moods in your Liked Songs"],
+        ["mix", "liked songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
         ["add 1 3 5", "queue songs from the last list. Also: add 2-6, add all"],
         ["play 2", "play one from the last list now"],
         ["play all", "play the whole list now, in place of what you had queued"],
         ["smooth", "reorder the next 30 songs. undo puts them back"],
-        ["set 60m peak", "build a set: flat, up, down or peak"],
+        ["set 60m peak", "build a set: flat, up, down or peak. Add a genre: set 60m peak house"],
         ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
         ["clear", "empty this window. Esc closes it"],
@@ -1883,8 +1979,25 @@
     now() {
       const item = state().item;
       const facts = songFacts(item?.uri);
-      if (!item) print("nothing is playing", "dim");
-      else print(facts ? `${item.name}: ${Math.round(facts[0])} BPM, key ${facts[1]}` : `${item.name}: Spotify has no tempo or key for this one`);
+      if (!item) {
+        print("nothing is playing", "dim");
+        return;
+      }
+      print(facts ? `${item.name}: ${Math.round(facts[0])} BPM, key ${facts[1]}` : `${item.name}: Spotify has no tempo or key for this one`);
+      const tags = tagsOf(item.uri).slice(0, 8);
+      if (tags.length) print(`tagged ${tags.map((tag) => tag.name).join(", ")}`, "dim");
+    },
+
+    async genres() {
+      const common = commonTags(await likedSongs());
+      const row = (kind, limit) => common.filter((tag) => tag[1] === kind).slice(0, limit).map((tag) => `${tag[0]} ${tag[2]}`).join(", ");
+      if (!common.length) {
+        print("no tags yet. They arrive in the first minute after Spotify opens", "dim");
+        return;
+      }
+      print(`genres in your Liked Songs: ${row("g", 40)}`);
+      print(`moods: ${row("m", 20)}`);
+      print("Use any of them in find, mix and set: find deep house, mix techno, set 60m peak house", "dim");
     },
 
     async find(args) {
@@ -1903,25 +2016,38 @@
         else words.push(arg.toLowerCase());
       }
       if (!args.length) {
-        print("find what? Try: find 124bpm 8A, find 120-128bpm, or find a name", "dim");
+        print("find what? Try: find deep house, find 124bpm 8A, find techno 130-140bpm, or find a name", "dim");
         return;
       }
-      const songs = (await likedSongs()).filter((song) => {
-        const facts = songFacts(song.uri);
-        if ((near || high || key) && !facts) return false;
-        if (near && tempoApart(near, facts[0]) > 0.03) return false;
-        if (high && (facts[0] < low || facts[0] > high)) return false;
-        if (key && facts[1] !== key) return false;
-        const text = `${song.name} ${song.artists}`.toLowerCase();
-        return words.every((word) => text.includes(word));
-      });
-      if (near) songs.sort((a, b) => tempoApart(near, songFacts(a.uri)[0]) - tempoApart(near, songFacts(b.uri)[0]));
-      else if (high) songs.sort((a, b) => songFacts(a.uri)[0] - songFacts(b.uri)[0]);
-      if (!songs.length && words.length > 1) return ASK;
-      // A tempo range with many matches shows 20 spread across it, not the 20 slowest.
+      // "find me some sad indie" is a sentence, not a search for the words "me" and "some".
+      if (words.some((word) => ["me", "some", "any", "songs", "tracks", "music", "something", "stuff", "please", "around"].includes(word))) return ASK;
+      const liked = await likedSongs();
+      const { tags, rest } = readTags(words, liked);
+      // A lone word can be a genre or part of a name, so it matches either. Tagged songs come first.
+      const loose = tags.length === 1 && !rest.length && !near && !high && !key;
+      const songs = liked
+        .map((song) => ({ song, facts: songFacts(song.uri), text: `${song.name} ${song.artists}`.toLowerCase(), weights: tags.map((tag) => tagWeight(song.uri, tag)) }))
+        .filter(({ facts, text, weights }) => {
+          if ((near || high || key) && !facts) return false;
+          if (near && tempoApart(near, facts[0]) > 0.03) return false;
+          if (high && (facts[0] < low || facts[0] > high)) return false;
+          if (key && facts[1] !== key) return false;
+          if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].name)))) return false;
+          return rest.every((word) => text.includes(word));
+        })
+        .map((entry) => ({ ...entry, strength: entry.weights.reduce((sum, weight) => sum + weight, 0) }));
+      if (!songs.length && (rest.length > 1 || (tags.length && rest.length))) return ASK;
+      // Order: nearest the tempo, or up a tempo range, or by how strongly the tags fit.
+      // A genre with many matches is shuffled a little, so it isn't the same 20 every time.
+      if (near) songs.sort((a, b) => tempoApart(near, a.facts[0]) - tempoApart(near, b.facts[0]));
+      else if (high) songs.sort((a, b) => a.facts[0] - b.facts[0]);
+      else if (tags.length) for (const entry of songs) entry.strength += songs.length > 20 ? Math.random() * 0.3 : 0;
+      if (tags.length && !near && !high) songs.sort((a, b) => b.strength - a.strength);
       const spread = high && songs.length > 20;
-      const shown = spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20);
-      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${spread ? ", 20 spread across the range:" : songs.length > 20 ? ", first 20:" : ":"}` : "no liked songs match", songs.length ? "" : "dim");
+      const shown = (spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20)).map((entry) => entry.song);
+      const tagged = tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : "";
+      const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : ", first 20:") : ":";
+      print(songs.length ? `${songs.length} liked ${songs.length === 1 ? "song" : "songs"}${tagged}${which}` : "no liked songs match. genres lists the genres and moods you can search", songs.length ? "" : "dim");
       printSongs(shown);
       resultsName = `Find: ${args.join(" ")}`;
     },
@@ -1935,19 +2061,23 @@
       }
       // "slower" and "faster": keys that fit, 4% to 15% down or up in tempo.
       const step = { slower: -1, faster: 1 }[args[0]?.toLowerCase()] ?? 0;
-      if (args.length > (step ? 1 : 0)) return ASK;
+      const liked = await likedSongs();
+      // Anything after that must name genres or moods: mix techno, mix slower chill.
+      const { tags, rest } = readTags(args.slice(step ? 1 : 0).map((arg) => arg.toLowerCase()), liked);
+      if (rest.length) return ASK;
       const shift = (facts) => {
         const octaves = Math.log2(facts[0] / from[0]);
         return 2 ** (octaves - Math.round(octaves)) - 1;
       };
       const queued = new Set(upcoming().map((next) => next.uri));
-      const songs = (await likedSongs())
-        .filter((song) => song.uri !== item.uri && !queued.has(song.uri) && songFacts(song.uri)?.[0])
+      const songs = liked
+        .filter((song) => song.uri !== item.uri && !queued.has(song.uri) && songFacts(song.uri)?.[0] && tags.every((tag) => tagWeight(song.uri, tag) > 0))
         .map((song) => ({ song, fit: transition(from, songFacts(song.uri)), shift: shift(songFacts(song.uri)) }))
         .filter((entry) => (step ? entry.fit.keyFits && entry.shift * step >= 0.04 && entry.shift * step <= 0.15 : entry.fit.grade === "clean"))
         .sort((a, b) => (step ? Math.abs(a.shift) - Math.abs(b.shift) : a.fit.cost - b.fit.cost))
         .map((entry) => entry.song);
-      const what = step ? `fit ${item.name}'s key, a step ${args[0].toLowerCase()}` : `mix cleanly with ${item.name}`;
+      const tagged = tags.length ? `tagged ${tags.map((tag) => tag.name).join(" and ")} ` : "";
+      const what = `${tagged}${step ? `fit ${item.name}'s key, a step ${args[0].toLowerCase()}` : `mix cleanly with ${item.name}`}`;
       print(songs.length ? `${songs.length} liked songs ${what} (${Math.round(from[0])} ${from[1]})${songs.length > 20 ? ", closest 20:" : ":"}` : `no liked songs ${what}`, songs.length ? "" : "dim");
       printSongs(songs.slice(0, 20));
       resultsName = `${step ? `A step ${args[0].toLowerCase()} than` : "Mixes with"} ${item.name}`;
@@ -2011,14 +2141,18 @@
     },
 
     async set(args) {
-      if (args.some((arg) => !/^\d{1,3}m?$/i.test(arg) && !SHAPES[arg.toLowerCase()])) return ASK;
+      const liked = await likedSongs();
+      // Words that aren't the length or the shape must name genres or moods: set 60m peak house.
+      const { tags, rest } = readTags(args.filter((arg) => !/^\d{1,3}m?$/i.test(arg) && !SHAPES[arg.toLowerCase()]).map((arg) => arg.toLowerCase()), liked);
+      if (rest.length) return ASK;
       const minutes = Math.min(240, Math.max(10, Number((/^(\d{1,3})m?$/i.exec(args.find((arg) => /^\d/.test(arg)) ?? "") ?? [])[1] ?? 60)));
       const shape = args.map((arg) => arg.toLowerCase()).find((arg) => SHAPES[arg]) ?? "peak";
       const item = state().item;
       const start = songFacts(item?.uri) ? { uri: item.uri, facts: songFacts(item.uri) } : null;
-      const set = buildSet(await likedSongs(), minutes, shape, start);
+      const tagged = tags.length ? ` of ${tags.map((tag) => tag.name).join(" and ")}` : "";
+      const set = buildSet(liked.filter((song) => tags.every((tag) => tagWeight(song.uri, tag) > 0)), minutes, shape, start);
       if (!set) {
-        print("not enough liked songs with a tempo and key to build from", "dim");
+        print(`not enough liked songs${tagged ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : " with a tempo and key"} to build a set from`, "dim");
         return;
       }
       const clean = set.songs.reduce((count, song, i) => count + (transition(i ? songFacts(set.songs[i - 1].uri) : start?.facts, songFacts(song.uri)).grade === "clean" ? 1 : 0), 0);
@@ -2026,10 +2160,10 @@
       const raw = set.songs.map((song) => songFacts(song.uri)[0]);
       const middle = [...raw].sort((a, b) => a - b)[Math.floor(raw.length / 2)];
       const tempos = raw.map((bpm) => Math.round(bpm / 2 ** Math.round(Math.log2(bpm / middle))));
-      print(`${set.songs.length} songs, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
+      print(`${set.songs.length} songs${tagged}, ${Math.round(set.ms / 60000)} min, ${shape}${start ? `, following ${item.name}` : ""}. ${clean} of ${set.songs.length} transitions clean`);
       print(`tempo ${tempoChart(set)}  ${tempos[0]} to ${tempos.at(-1)} BPM, top ${Math.max(...tempos)}`, "chart");
       printSongs(set.songs, start?.facts);
-      resultsName = `Set: ${minutes} min ${shape}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+      resultsName = `Set: ${minutes} min ${shape}${tagged}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
       print("play all starts it. save keeps it as a playlist. Run set again for a different one", "dim");
     },
 
@@ -2108,35 +2242,39 @@
   const MODEL_GUIDE = [
     "You are the assistant inside a console in Spotify. You turn what the user says into console commands, and you may ask one short question when you need to. Answer with JSON only.",
     "Commands:",
-    "find <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Words match song titles and artist names only.",
-    "mix   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
-    "set <minutes>m <shape>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak.",
+    "find <genre or mood> <words> <N>bpm <key>   list songs from the user's Liked Songs. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
+    "mix <genre>   list Liked Songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster.",
+    "set <minutes>m <shape> <genre>   list a set built from Liked Songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
     "save <name>   save the last list as a playlist with that name.",
     "smooth   reorder the next 30 queued songs so they run into each other. undo puts them back.",
-    "now   show the playing song's tempo and key.",
+    "now   show the playing song's tempo, key and tags.",
     "Rules:",
     "Use only these commands, at most 4, in the order they should run. A list command (find, mix, set) must come before play, add or save, unless the user means the list already in the console.",
     'When the user asks to play, hear, put on or switch to something, finish with "play all". When they ask to queue or add, use add. When they only ask to find or see songs, just list them.',
-    "You can't search by genre or mood. When the user names one, turn it into a tempo range you know for it (ambient or chill 60-90, hip hop 80-100, house 120-128, techno 128-140, hard techno 140-160, drum and bass 165-180) and say that you matched by tempo, not genre.",
+    "For a genre or mood, use the closest names from the tag list. Use one or two tags, never more. If the user asks for a style that is not in the list, use its nearest tag and add a tempo range that fits it (hard techno: techno 140-160bpm). If nothing in the list is close, do not refuse: run find with the user's own word, which also matches titles and artists.",
+    "Never answer a question about the playing song from memory. Use now.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
     "If the request can't be done with these commands, give no commands and say so.",
-    "Examples:",
+    "Examples (they assume the tag list has house, techno, jazz, chill and hip hop):",
     'Request: queue 3 songs that mix with this -> {"say": "Queueing three songs that mix with it.", "commands": ["mix", "add 1 2 3"]}',
-    'Request: play some jazz -> {"say": "I can\'t search by genre, and jazz is not in my tempo list. Here are liked songs with jazz in the title or artist.", "commands": ["find jazz"]}',
-    'Request: find me drum and bass -> {"say": "Here are your liked songs at drum and bass tempo, 165 to 180 BPM. I matched by tempo, not genre.", "commands": ["find 165-180bpm"]}',
+    'Request: queue a few techno tracks that mix with this -> {"say": "Queueing techno that mixes with it.", "commands": ["mix techno", "add 1 2 3"]}',
+    'Request: play some jazz -> {"say": "Playing jazz from your Liked Songs. Want these saved as a playlist?", "commands": ["find jazz", "play all"]}',
+    'Request: play some hard techno -> {"say": "Playing your fastest techno, 140 to 160 BPM. Want these saved as a playlist?", "commands": ["find techno 140-160bpm", "play all"]}',
+    'Request: play some reggae -> {"say": "Reggae is not one of your tags, so I am searching the word.", "commands": ["find reggae", "play all"]}',
+    'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
+    'Request: something chill to work to -> {"say": "Playing chill songs from your Liked Songs.", "commands": ["find chill", "play all"]}',
     'Request: play something like this but slower -> {"say": "Switching to slower songs in a matching key. Want these saved as a playlist?", "commands": ["mix slower", "play all"]}',
-    'Request: play some hard techno -> {"say": "Playing your liked songs at hard techno tempo, 140 to 160 BPM. I matched by tempo, not genre. Want these saved as a playlist?", "commands": ["find 140-160bpm", "play all"]}',
     'Request: yes, call it warehouse -> {"say": "Saving it as warehouse.", "commands": ["save warehouse"]}',
     'Request: sure, name it late night -> {"say": "Saving it as late night.", "commands": ["save late night"]}',
     'Request: save it as pregame -> {"say": "Saving it as pregame.", "commands": ["save pregame"]}',
     'Request: play it -> {"say": "Playing the list.", "commands": ["play all"]}',
     'Request: yes -> {"say": "What should I call the playlist?", "commands": []}',
     'Request: put on some deftones -> {"say": "Playing Deftones from your Liked Songs.", "commands": ["find deftones", "play all"]}',
-    'Request: build me an hour long set that climbs -> {"say": "Here is a one hour set that climbs. Want me to play it or save it?", "commands": ["set 60m up"]}',
+    'Request: build me an hour long house set that climbs -> {"say": "Here is a one hour house set that climbs. Want me to play it or save it?", "commands": ["set 60m up house"]}',
     'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
     'Request: what is the weather -> {"say": "I can only find, play, queue and save music here.", "commands": []}',
   ].join("\n");
@@ -2191,8 +2329,10 @@
     const signal = asking.signal;
     const timer = setTimeout(() => asking?.abort("slow"), 60000);
     try {
+      // The genres and moods this library actually has, so the model picks real names.
+      const known = commonTags(await loadLibrary().catch(() => [])).filter((tag) => tag[1] !== "o").slice(0, 160).map((tag) => tag[0]).join(", ");
       const list = results.length ? `${results.length} songs (${resultsName}): ${results.slice(0, 6).map((song, i) => `${i + 1}. ${song.name} by ${song.artists}`).join("; ")}${results.length > 6 ? "; ..." : ""}` : "empty";
-      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Playing now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
+      const body = { model, stream: false, think: false, format: MODEL_REPLY, options: { temperature: 0, num_ctx: 4096 }, messages: [{ role: "system", content: MODEL_GUIDE }, ...chat.slice(-8), { role: "user", content: `Tag list: ${known || "none yet"}.\nPlaying now: ${playing}.\nLast list in the console: ${list}.\nRequest: ${line}` }] };
       let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         delete body.think; // Models that don't reason step by step reject the switch.
