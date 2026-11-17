@@ -4306,7 +4306,7 @@
   const modeSwitch = makeSwitch(
     "mode",
     [
-      ["auto", "auto", "auto", "Plays itself along with the song"],
+      ["auto", "watch", "watch", "Watch: the game plays itself along with the song"],
       ["play", "play", "play", "You play. \u2191 jumps or flaps, \u2193 ducks, the shooter moves with \u2191\u2193. Crashing pauses the song; space resumes."],
     ],
     (value) => setGame(game.kind, value === "play"),
@@ -4329,10 +4329,10 @@
     (value) => setLook(value),
   );
   const viewSwitch = makeSwitch(
-    "view",
+    "games",
     [
-      ["games", "games", "games", "The tall player bar with the games"],
-      ["compact", "compact", "min", "A regular-size player bar, no games"],
+      ["games", "on", "on", "The tall player bar with the games"],
+      ["compact", "off", "off", "A regular-size player bar, no games"],
     ],
     (value) => setView(value),
   );
@@ -4344,12 +4344,9 @@
     gameSwitch.select(game.kind);
     modeSwitch.select(game.manual ? "play" : "auto");
     levelSwitch.select(level());
-    if (game.manual) {
-      levelSwitch.setDisabled(false);
-      levelSwitch.buttons.forEach((button, i) => (button.title = levelTitles[i]));
-    } else {
-      levelSwitch.setDisabled(true, "On auto the level follows the song's pace. Switch to play to pick one.");
-    }
+    // On watch the level follows the song's pace, so the switch only shows up in play.
+    levelSwitch.wrap.hidden = !game.manual;
+    levelSwitch.buttons.forEach((button, i) => (button.title = levelTitles[i]));
   };
 
   const resetAll = () => {
@@ -4526,6 +4523,7 @@
   const spotifyButton = (value) => document.querySelector(SPOTIFY_BUTTONS.find(([v]) => v === value)[4]);
 
   const refreshSpotifyButtons = () => {
+    borrowIcons();
     for (const button of showSwitch.buttons) {
       const original = spotifyButton(button.dataset.value);
       button.disabled = !original || original.disabled;
@@ -4606,10 +4604,64 @@
     muteButton.blur();
   });
 
+  // Look and games are set once and forgotten, so they live in a small menu behind
+  // one settings button. It opens upward, closes on a pick, Esc or a click elsewhere.
+  const settingsWrap = el("div", "tty-mode tty-settings");
+  const settingsButton = el("button", "tty-settings-button", "\u2699 settings");
+  settingsButton.type = "button";
+  settingsButton.title = "Look and games";
+  settingsButton.setAttribute("aria-haspopup", "true");
+  settingsButton.setAttribute("aria-expanded", "false");
+  const settingsMenu = el("div", "tty-settings-menu");
+  settingsMenu.hidden = true;
+  settingsMenu.setAttribute("role", "group");
+  settingsMenu.setAttribute("aria-label", "Settings");
+  settingsMenu.append(lookSwitch.wrap, viewSwitch.wrap);
+  settingsWrap.append(settingsButton, settingsMenu);
+  const openSettings = (open) => {
+    settingsMenu.hidden = !open;
+    settingsButton.setAttribute("aria-expanded", String(open));
+    settingsWrap.classList.toggle("is-open", open);
+  };
+  settingsButton.addEventListener("click", () => {
+    openSettings(settingsMenu.hidden);
+    settingsButton.blur();
+  });
+  for (const button of [...lookSwitch.buttons, ...viewSwitch.buttons]) button.addEventListener("click", () => openSettings(false));
+  document.addEventListener("pointerdown", (event) => {
+    if (!settingsMenu.hidden && !settingsWrap.contains(event.target)) openSettings(false);
+  }, true);
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !settingsMenu.hidden) openSettings(false);
+  }, true);
+
+  // Queue, devices, miniplayer and full screen wear Spotify's own icons, copied from
+  // its hidden buttons. The word stays as a fallback if an icon can't be found.
+  showSwitch.wrap.classList.add("tty-show");
+  for (const button of showSwitch.buttons) {
+    const word = el("span", "tty-show-word", button.textContent);
+    button.textContent = "";
+    button.append(word);
+    button.setAttribute("aria-label", button.title);
+  }
+  const borrowIcons = () => {
+    for (const button of showSwitch.buttons) {
+      if (button.querySelector(".tty-show-icon")) continue;
+      const icon = spotifyButton(button.dataset.value)?.querySelector("svg");
+      if (!icon) continue;
+      const copy = icon.cloneNode(true);
+      copy.removeAttribute("class");
+      copy.classList.add("tty-show-icon");
+      copy.setAttribute("aria-hidden", "true");
+      button.prepend(copy);
+      button.classList.add("has-icon");
+    }
+  };
+
   const gamesBar = el("div", "tty-switchbar tty-switchbar--games");
   gamesBar.append(gameSwitch.wrap, modeSwitch.wrap, levelSwitch.wrap);
   const settingsBar = el("div", "tty-switchbar tty-switchbar--settings");
-  settingsBar.append(lookSwitch.wrap, viewSwitch.wrap, showSwitch.wrap, volumeWrap);
+  settingsBar.append(settingsWrap, showSwitch.wrap, volumeWrap);
 
   const placeSwitches = () => {
     const pane = document.querySelector(":is([data-testid=now-playing-bar])");

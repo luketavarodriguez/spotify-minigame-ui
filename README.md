@@ -24,7 +24,7 @@ The playback bar is the ground. The song is the level.
 
 - **Dino, flappy and a shooter.** Switch between them on the bar's top border.
 - **Everything lands on the beat.** Cacti show up so the dino takes off exactly on a beat. Flappy's gravity follows the tempo, so you end up flapping in time without anyone telling you to. The shooter's gun fires on the beat and the aliens march to it.
-- **Auto or play.** On auto it plays itself and the difficulty follows the song's BPM. On play it's yours… `↑` jumps or flaps, `↓` ducks.
+- **Watch or play.** On watch it plays itself and the difficulty follows the song's BPM. On play it's yours… `↑` jumps or flaps, `↓` ducks, and you pick the level.
 - **Crashing pauses your song.** Which is a genuinely rude thing for software to do, and I love it.
 
 | Flappy | Shooter |
@@ -73,7 +73,7 @@ The console is a real pane, not a pop-up. Drag its title to dock it under or bes
 
 ![Spotify's own look](images/spotify-look.jpg)
 
-If the terminal thing isn't your vibe, flip the switch. Same layout, same games, same console, in Spotify's normal look.
+If the terminal thing isn't your vibe, open ⚙ settings on the bar's top border and pick Spotify. Same layout, same games, same console, in Spotify's normal look. The same menu turns the games off.
 
 There's also lyrics running one line at a time along the top border, listening stats on Home, and a compact view with no games for when you need to act like an adult.
 

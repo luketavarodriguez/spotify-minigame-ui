@@ -310,6 +310,150 @@ html.tty-compact :is(.tty-switchbar--games, .tty-mode--spotify) {
   font-size: 11px;
 }
 
+/* Settings: one button on the border opens a small menu upward with look and
+   games. Labels stay visible in the menu at any window width. */
+.tty-settings {
+  position: relative;
+}
+
+.tty-settings-button {
+  padding: 0 7px;
+  border: 0;
+  font: inherit;
+  color: var(--spice-button);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--tty-line);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tty-settings-button:is(:hover, :focus-visible),
+.tty-settings.is-open .tty-settings-button {
+  color: var(--spice-main);
+  background: var(--spice-button);
+}
+
+.tty-settings-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--spice-main);
+  box-shadow: inset 0 0 0 1px var(--tty-line), 0 8px 24px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.tty-settings-menu[hidden] {
+  display: none;
+}
+
+.tty-settings-menu .tty-mode {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tty-switchbar .tty-settings-menu .tty-mode-label {
+  display: inline;
+  min-width: 3.5em;
+}
+
+.tty-switchbar--tight .tty-settings-menu .tty-mode-option {
+  font-size: inherit;
+}
+
+.tty-switchbar--tight .tty-settings-menu .tty-mode-option::after {
+  content: none;
+}
+
+/* Queue, devices, miniplayer and full screen: Spotify's icons, no box. */
+.tty-show .tty-mode-label {
+  display: none;
+}
+
+.tty-show .tty-mode-options {
+  gap: 2px;
+  box-shadow: none;
+}
+
+.tty-show .tty-mode-option {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+}
+
+.tty-show .tty-mode-option.has-icon .tty-show-word {
+  display: none;
+}
+
+.tty-show-icon {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.tty-switchbar--tight .tty-show .tty-mode-option.has-icon::after {
+  content: none;
+}
+
+/* The game controls read as one group: only "game" keeps a label. */
+.tty-switchbar--games .tty-mode:not(:first-child) .tty-mode-label {
+  display: none;
+}
+
+.tty-switchbar--games .tty-mode[hidden] {
+  display: none;
+}
+
+html.tty-spotify .tty-settings-button {
+  padding: 0 10px;
+  border-radius: 9999px;
+  color: var(--text-base, #fff);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: none;
+  text-transform: capitalize;
+}
+
+html.tty-spotify .tty-settings-button:is(:hover, :focus-visible),
+html.tty-spotify .tty-settings.is-open .tty-settings-button {
+  color: #000;
+  background: #fff;
+}
+
+html.tty-spotify .tty-settings-menu {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #282828;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+html.tty-spotify .tty-settings-menu .tty-mode-label {
+  color: var(--text-subdued, #b3b3b3);
+  text-transform: capitalize;
+}
+
+html.tty-spotify .tty-settings-menu .tty-mode-option {
+  text-transform: capitalize;
+}
+
+html.tty-spotify .tty-show .tty-mode-option,
+html.tty-spotify .tty-show .tty-mode-option:is(:hover, :focus-visible):not([aria-pressed="true"]):not(:disabled) {
+  color: var(--text-subdued, #b3b3b3);
+  background: transparent;
+}
+
+html.tty-spotify .tty-show .tty-mode-option:is(:hover, :focus-visible):not(:disabled) {
+  color: var(--text-base, #fff);
+}
+
+html.tty-spotify .tty-show .tty-mode-option[aria-pressed="true"] {
+  color: var(--text-bright-accent, #1ed760);
+  background: transparent;
+}
+
 /* ---- Games view: a tall pane with open sky on top, the ground (the progress
    bar) through the middle, and bigger song controls underneath in one row
    with the track info and volume. --------------------------------------- */
