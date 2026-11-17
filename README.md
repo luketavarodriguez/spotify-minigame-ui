@@ -230,6 +230,8 @@ For the curious.
 
 **Stats are counted locally.** A play counts after 30 seconds of listening, in this Spotify app only, from the day you install.
 
+**Want to hack on it?** Point yourself (or your AI agent) at [AGENTS.md](AGENTS.md). It's the map: how to change something, see it running, and not break my music while testing. The long version, with every Spotify quirk I hit and my notes on where AI DJs could go next, is in [dev/NOTES.md](dev/NOTES.md).
+
 ## Self-repair on macOS
 
 Every Spotify update removes the theme. Self-repair notices and puts it back. Turn it on once, from the theme's folder:
