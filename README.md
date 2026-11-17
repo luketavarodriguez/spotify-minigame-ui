@@ -39,6 +39,8 @@ Every song in up next shows its BPM and its key on the Camelot wheel (the thing 
 
 Hit `[smooth]` and it reorders your next 30 songs so the tempos and keys run into each other. It works on any queue… an album, someone else's playlist, radio. Click again to undo.
 
+Bored of the vibe? Hit `[shift]`. It picks a genre from your own songs that's nothing like what's playing, at random, and queues six of them to play next, starting with the one that mixes best out of the current song. Click again to take them back out.
+
 ### A console you can just talk to
 
 ![The console](images/console.png)
@@ -196,6 +198,8 @@ You don't need to memorize any of this (that's the point of plain words), but ev
 | `smooth` | Reorder the next 30 songs so they flow |
 | `save friday` | Save the last list as a playlist |
 | `top` | Your most played this month |
+| `shift` | Change the vibe: six songs from a random different genre, queued next |
+| `log` | The last songs played, finished or skipped. `log skips` for just the skips |
 | `genres` / `playlists` | What you've got to work with |
 | `now` | The playing song's tempo, key and tags |
 | `key` / `model` | Connect a model, or see which one is answering |

@@ -1521,8 +1521,10 @@
   const queueBar = el("div", "tty-queue-bar");
   const smoothButton = el("button", "tty-queue-smooth", "smooth");
   smoothButton.type = "button";
+  const shiftButton = el("button", "tty-queue-smooth tty-queue-shift", "shift");
+  shiftButton.type = "button";
   const queueNow = el("span", "tty-queue-now");
-  queueBar.append(smoothButton, queueNow);
+  queueBar.append(smoothButton, shiftButton, queueNow);
   // Drag up next's inner edge to set the width of both side panes (they always match).
   const SIDE_KEY = "tty-side-width";
   let sideCap = Number(localStorage.getItem(SIDE_KEY)) || 560;
@@ -1739,8 +1741,111 @@
     smoothButton.blur(); // So the keys go back to the game.
   });
 
+  // ---- Shift: change the vibe ----
+  // Picks a genre from your own songs that the playing song and the next few don't
+  // carry, at random, and queues six songs of it to play next. The first one is the
+  // best mix out of the playing song, and the six run into each other. Click again
+  // to take them back out.
+  const SHIFT_SONGS = 6;
+  let shiftUndo = null; // { uris, signature }
+  let shiftBusy = false;
+  let shiftNote = null; // { text, until }
+  const shiftSays = (text) => {
+    shiftNote = { text, until: Date.now() + 4000 };
+    showShift();
+  };
+  const showShift = () => {
+    if (shiftUndo && !upcoming().some((item) => item.provider === "queue" && shiftUndo.uris.includes(item.uri))) shiftUndo = null; // They've played or gone.
+    if (shiftNote && Date.now() > shiftNote.until) shiftNote = null;
+    const text = shiftBusy ? "..." : shiftNote ? shiftNote.text : shiftUndo ? "undo" : "shift";
+    if (shiftButton.textContent !== text) shiftButton.textContent = text;
+    shiftButton.classList.toggle("is-note", Boolean(shiftBusy || shiftNote));
+    shiftButton.hidden = !state().item;
+    shiftButton.title = shiftUndo ? `Take the ${shiftUndo.name} songs back out of the queue` : "Change the vibe: queue six songs from a different genre in your library, starting with one that mixes out of this song";
+  };
+  const shiftVibe = async () => {
+    const current = state().item?.uri;
+    const words = (name) => name.split(" ");
+    const near = new Set([current, ...upcoming().slice(0, 5).map((item) => item.uri)].flatMap((uri) => tagsOf(uri).filter((tag) => tag.kind === "g").slice(0, 3).flatMap((tag) => words(tag.name))));
+    const { songs: pool } = await songsFor(null);
+    // A real vibe in this library: one of its 40 commonest genres, sharing no word with what's playing ("house" rules out "deep house").
+    const choices = commonTags(pool).filter((tag) => tag[1] === "g" && tag[2] >= 25).slice(0, 40).filter((tag) => !words(tag[0]).some((word) => near.has(word)));
+    if (!choices.length) return null;
+    const name = choices[Math.floor(Math.random() * choices.length)][0];
+    const tag = { name, numbers: new Set([tagNumber.get(name)]) };
+    const playing = songFacts(current);
+    // The same song often sits in a library twice (a single and the album). Count it once.
+    const sameName = (name, artists) => `${name.toLowerCase().replace(/ [-(].*$/, "")}|${artists.split(", ")[0].toLowerCase()}`;
+    const playingItems = [state().item, ...upcoming()].filter(Boolean);
+    const skip = new Set([...playingItems.map((item) => item.uri), ...playingItems.map((item) => sameName(item.name ?? "", (item.artists ?? []).map((a) => a.name).join(", ")))]);
+    const seen = new Set();
+    const fits = pool
+      .filter((song) => {
+        const twin = sameName(song.name, song.artists);
+        if (skip.has(song.uri) || skip.has(twin) || seen.has(twin)) return false;
+        seen.add(twin);
+        return song.ms > 90000 && song.ms < 600000 && songFacts(song.uri) && tagWeight(song.uri, tag) >= 0.5;
+      })
+      .map((song) => ({ song, facts: songFacts(song.uri), strength: tagWeight(song.uri, tag) + Math.random() * 0.3 }))
+      .sort((a, b) => b.strength - a.strength)
+      .slice(0, 30);
+    if (fits.length < SHIFT_SONGS) return null;
+    // The way in: of these, the one that mixes best out of the playing song.
+    fits.sort((a, b) => transition(playing, a.facts).cost - transition(playing, b.facts).cost);
+    const bridge = fits[0];
+    // The rest stay near the way-in's tempo (within 12%, half and double time count), so the new vibe holds together.
+    const rest = fits.slice(1).filter((entry) => tempoApart(bridge.facts[0], entry.facts[0]) <= 0.12).sort(() => Math.random() - 0.5).slice(0, SHIFT_SONGS - 1);
+    if (rest.length < SHIFT_SONGS - 1) return null;
+    return { name, songs: [bridge, ...smoothest(bridge, rest)].map((entry) => entry.song) };
+  };
+  const shift = async () => {
+    if (shiftBusy) return { busy: true };
+    shiftBusy = true;
+    showShift();
+    try {
+      if (shiftUndo) {
+        const out = upcoming().filter((item) => item.provider === "queue" && shiftUndo.uris.includes(item.uri));
+        await within(player.removeFromQueue(out.map((item) => ({ uri: item.uri, uid: item.uid }))));
+        shiftUndo = null;
+        shiftBusy = false;
+        shiftSays("undone");
+        return { undone: true };
+      }
+      const picked = await shiftVibe();
+      if (!picked) {
+        shiftBusy = false;
+        shiftSays("no other vibe");
+        return;
+      }
+      const uris = picked.songs.map((song) => song.uri);
+      const queuedBefore = upcoming().filter((item) => item.provider === "queue");
+      // Spotify sometimes drops a queue change; check it took and send it again.
+      for (let tries = 0; tries < 3; tries += 1) {
+        await within(player.addToQueue(uris.map((uri) => ({ uri }))));
+        if (await settle(() => uris.every((uri) => upcoming().some((item) => item.provider === "queue" && item.uri === uri)))) break;
+        await nap(700);
+      }
+      // New songs join the end of your queue. A vibe change should come next, so they go first.
+      const added = uris.map((uri) => upcoming().find((item) => item.provider === "queue" && item.uri === uri)).filter(Boolean);
+      if (queuedBefore.length && added.length) await reorder(added, queuedBefore[0]);
+      shiftUndo = { uris, name: picked.name };
+      queueSignature = null;
+      shiftBusy = false;
+      shiftSays(`> ${picked.name}`);
+      return picked;
+    } catch {
+      shiftBusy = false;
+      shiftSays("couldn't shift");
+    }
+  };
+  shiftButton.addEventListener("click", () => {
+    if (!shiftNote) shift(); // A second click during the note is a double click, not an undo.
+    shiftButton.blur();
+  });
+
   const renderQueue = () => {
     showSmooth();
+    showShift();
     const current = state().item?.uri;
     const items = upcoming().slice(0, 12);
     wantSongs([current, ...items.map((item) => item.uri)], true);
@@ -2484,6 +2589,8 @@
         ["find 2018", "songs you liked that year. Mix it in: find house 2018"],
         ["find 90s", "songs released in the 90s. Also find 1995-1999 and find released 2018. Mix it in: find house 90s"],
         ["top", "your most played songs this month"],
+        ["shift", "change the vibe: six songs from a different genre in your library, queued to play next"],
+        ["log", "the last songs played, finished or skipped and where. log skips shows only the skips"],
         ["mix", "your songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
         ["like", "your songs that sound like this one, by genre and mood. like mix also matches key and tempo. Or name any song: like mi combi"],
@@ -2520,6 +2627,31 @@
     },
 
     // Your most played songs this month, from the theme's own count (it only keeps the current month).
+    async shift() {
+      const picked = await shift();
+      if (picked?.undone) print("took the shifted songs back out of the queue", "ok");
+      else if (picked?.busy) print("still shifting, one moment", "dim");
+      else if (picked?.songs) {
+        print(`shifting to ${picked.name}: ${picked.songs.length} songs queued to play next. Run shift again, or click undo on up next, to take them out`, "ok");
+        printSongs(picked.songs);
+      } else print("couldn't find another vibe in your songs to shift to", "dim");
+    },
+
+    async log(args) {
+      const skipsOnly = /^skip/i.test(args[0] ?? "");
+      const rows = (await readLog(400)).filter((row) => !skipsOnly || row.end === "skipped").slice(0, 20);
+      if (!rows.length) {
+        print(skipsOnly ? "no skips logged yet" : "nothing logged yet. Every song that plays from now on is noted when it ends", "dim");
+        return;
+      }
+      const recent = await readLog(100);
+      const skipped = recent.filter((row) => row.end === "skipped").length;
+      const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+      print(`${skipsOnly ? "your last skips" : "the last songs played"}. Of the last ${recent.length}, ${skipped} were skipped:`);
+      printSongs(rows.map((row) => ({ uri: row.uri, name: `${row.name} (${row.end === "skipped" ? `skipped at ${clock(row.at)} of ${clock(row.duration)}` : "finished"}${row.seeks ? `, ${row.seeks} seek${row.seeks > 1 ? "s" : ""}` : ""})`, artists: row.artists, ms: row.duration })));
+      resultsName = skipsOnly ? "Skipped" : "Recently played";
+    },
+
     top() {
       const tracks = Object.entries(stats.months[monthKey()]?.tracks ?? {})
         .filter(([uri, track]) => trackId(uri) && track.plays > 0)
@@ -3107,6 +3239,8 @@
     "playlists   list the user's playlists.",
     "find, mix, like and set can end with in <playlist name> to look only inside that playlist, with in liked for Liked Songs only, or with in library for every playlist they follow too. Example: find techno in house edm.",
     "top   list the user's most played songs this month. This is the only play count there is.",
+    "shift   change the vibe: queue six songs from a random different genre in the user's own songs, starting with one that mixes out of the playing song. Use it when the user wants something different, a change, a switch-up or a surprise, without naming what.",
+    "log   list the last songs played and whether each was finished or skipped. log skips lists only the skipped ones.",
     'A plain year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. "Released", "came out", "new in" or a decade means when songs came out: use find <decade> or find released <year>.',
     "mix <genre>   list the user's songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster. mix does not look at how songs sound.",
     "like <song>   list the user's songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi, and can be any song on Spotify. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
@@ -3157,6 +3291,9 @@
     'Request: play something upbeat but not too fast -> {"say": "Playing upbeat songs between 95 and 118 BPM.", "commands": ["find upbeat 95-118bpm", "play all"]}',
     'Request: I am hosting a dinner, put something on -> {"say": "Playing dinner music from your songs: lounge, smooth and classy.", "commands": ["find dinner", "play all"]}',
     'Request: what have I been listening to most -> {"say": "Here are your most played songs this month.", "commands": ["top"]}',
+    'Request: switch it up, I\'m bored of this -> {"say": "Shifting to something different.", "commands": ["shift"]}',
+    'Request: what did I just listen to -> {"say": "Here are the last songs you played.", "commands": ["log"]}',
+    'Request: what songs have I been skipping -> {"say": "Here are the songs you skipped lately.", "commands": ["log skips"]}',
     'Request: what genre is this -> {"say": "Here are its tempo, key and tags.", "commands": ["now"]}',
     'Request: play some music I can party to -> {"say": "Playing party music from your songs: club, dance and pump up.", "commands": ["find party", "play all"]}',
     'Request: play some stoner music -> {"say": "Playing stoner music from your songs: psychedelic rock, reggae, dub and trip hop.", "commands": ["find psychedelic rock or reggae or dub or trip hop", "play all"]}',
@@ -4743,12 +4880,89 @@
   };
   window.addEventListener("beforeunload", saveStats);
 
+  // ---- Listening log ----
+  // One row per song when it ends: how much was heard, whether it finished or was
+  // skipped, seeks, what played before it and where it came from. Kept in this
+  // page's IndexedDB on this computer, nowhere else. It feeds the log command now,
+  // and later the DJ (a skip right after a blend is a bad sign) and taste.
+  let logDb = null;
+  const openLog = () =>
+    (logDb ??= new Promise((resolve, reject) => {
+      const req = indexedDB.open("tty-log", 1);
+      req.onupgradeneeded = () => req.result.createObjectStore("plays", { autoIncrement: true });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }));
+  const addLog = (row) =>
+    openLog()
+      .then((db) => db.transaction("plays", "readwrite").objectStore("plays").add(row))
+      .catch(() => {}); // No storage: the log just doesn't grow.
+  const readLog = (limit = 200) =>
+    openLog()
+      .then(
+        (db) =>
+          new Promise((resolve) => {
+            const rows = [];
+            const req = db.transaction("plays").objectStore("plays").openCursor(null, "prev");
+            req.onsuccess = () => {
+              const cursor = req.result;
+              if (!cursor || rows.length >= limit) return resolve(rows);
+              rows.push(cursor.value);
+              cursor.continue();
+            };
+            req.onerror = () => resolve(rows);
+          }),
+      )
+      .catch(() => []);
+  // A song that reaches its last 40 seconds, or 85% of its length, finished: Mix
+  // blends leave a song up to 35 seconds early, and that isn't a skip.
+  const FINISH_MS = 40000;
+  const logEntry = { uri: null };
+  const closeLogEntry = () => {
+    const e = logEntry;
+    if (!e.uri || !e.duration || e.heard < 2000) return;
+    const finished = e.position >= e.duration - FINISH_MS || e.position >= e.duration * 0.85;
+    addLog({
+      uri: e.uri, name: e.name, artists: e.artists, duration: e.duration,
+      heard: Math.round(e.heard), at: Math.round(e.position), end: finished ? "finished" : "skipped",
+      seeks: e.seeks, before: e.before, context: e.context, from: e.provider,
+      started: e.started, hour: new Date(e.started).getHours(),
+    });
+  };
+  const trackLog = (s, dt) => {
+    const item = s.item;
+    const uri = item?.uri ?? null;
+    const position = (s.positionAsOfTimestamp ?? 0) + (s.isPaused ? 0 : Date.now() - (s.timestamp ?? Date.now()));
+    if (uri !== logEntry.uri) {
+      const before = logEntry.uri;
+      closeLogEntry();
+      Object.assign(logEntry, {
+        uri, name: item?.name ?? "", artists: (item?.artists ?? []).map((a) => a.name).join(", "),
+        duration: item?.duration?.milliseconds ?? item?.metadata?.duration ?? 0,
+        heard: 0, position, seeks: 0, before, context: s.context?.uri ?? null, provider: item?.provider ?? null, started: Date.now(), tickAt: Date.now(),
+      });
+      return;
+    }
+    if (!uri) return;
+    // A jump the clock can't explain is a seek. Use the real time since the last
+    // tick: a hidden window ticks about once a minute.
+    const now = Date.now();
+    const elapsed = Math.min(90000, now - (logEntry.tickAt ?? now));
+    logEntry.tickAt = now;
+    const expected = logEntry.position + (s.isPaused ? 0 : elapsed);
+    if (Math.abs(position - expected) > 4000) logEntry.seeks += 1;
+    logEntry.position = position;
+    if (s.isPaused === false) logEntry.heard += elapsed;
+  };
+  // No row on reload or quit: the song in progress didn't end, so it's neither finished nor skipped.
+
   // Called every tick: adds the time since the last one while something plays.
   const countListening = (s) => {
     const now = Date.now();
     const item = s.item;
     const dt = listen.lastAt ? Math.min(2600, now - listen.lastAt) : 0;
     listen.lastAt = now;
+    trackLog(s, dt);
     if ((item?.uri ?? null) !== listen.uri) {
       Object.assign(listen, { uri: item?.uri ?? null, ms: 0, counted: false });
       loadRecent();

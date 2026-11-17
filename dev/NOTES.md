@@ -148,6 +148,8 @@ These grades know tempo and key only. Two songs can grade clean and still clash 
 - `find <year>` means the year a song was liked. `find 90s`, `find 1995-1999` and `find released 2018` mean when it came out. `top` is this month's plays as counted by the theme. The console says so when asked for things it can't know.
 - `like` ranks by shared tags (genres count double). `mix` is tempo and key only. `radio` is Spotify's song radio minus songs already in the pool.
 - `undo` covers play, add, smooth and dj through `undoPlan = {done, run}`.
+- `shift` (also a button on up next) picks one of the library's 40 commonest genres that shares no word with the playing song's or the next five songs' top genres, then queues six songs of it: the best mix out of the playing song first, the rest within 12% of its tempo, ordered by `smoothest`. Copies of one song (a single and the album) count once. They are moved ahead of anything already queued. Running it again removes them; it has its own undo, not `undoPlan`.
+- The listening log (`log`) keeps one row per song in IndexedDB (`tty-log`, store `plays`): heard ms, where it stopped, finished or skipped, seeks, the song before, context, provider and hour. Finished means it reached its last 40 seconds or 85%, since Mix blends leave songs up to 35 seconds early.
 
 ## Model layer
 
