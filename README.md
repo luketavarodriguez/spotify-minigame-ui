@@ -1,35 +1,80 @@
 # Spotify Minigame UI
 
-A Spicetify theme that turns Spotify's player bar into a small arcade. The playback bar becomes the ground for three games that play along with whatever song is on, synced to its beat.
+I put the Chrome dinosaur on Spotify's progress bar… and then I couldn't stop.
+
+![The terminal look, with the console open](images/terminal-look.jpg)
 
 Developed by [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagram.com/tava) on Instagram.
 
-![Spotify Minigame UI](preview.png)
+## How this started
 
-## What it does
+It started as a procrastination thing. I restyled the Spotify desktop app to look like a terminal (monospace everything, green borders, album art in green halftone), and then I looked at the progress bar. It's the thing I stare at most in the whole app and it does exactly one job. So I put the no-wifi dinosaur on it.
 
-- **Three games on the playback bar:** the Chrome dino, flappy, and a side-scrolling shooter.
-  - **Auto** mode plays itself along with the song.
-  - **Play** mode is yours: `↑` jumps or flaps, `↓` ducks, and the shooter moves with `↑` `↓`.
-  - Space stays Spotify's play/pause. Crashing pauses the song, and resuming starts a new run.
-- **Synced to the music:** it reads Spotify's audio analysis for each song.
-  - Obstacles land on the beat, and loud sections put one on every beat.
-  - Flappy's gravity follows the tempo, so you flap in time.
-  - The shooter's gun fires on the beat and the aliens march to it.
-  - On auto, the difficulty follows the song's BPM.
-- **Lyrics** scroll one line at a time along the top border.
-- **Up next:** the queue sits on the right. Click a song to play it. Each song shows its BPM and its key on the Camelot wheel, and the numbers light up when a song mixes cleanly with the one before it.
-- **Smooth:** one click on the pane's border reorders the next 30 songs so tempos and keys run into each other. It works on any queue: an album, someone else's playlist, radio. Click again to undo.
-- **A working console:** click the prompt in the top bar, or press the backtick key, and type. It opens as a pane in the layout, not a window on top: drag its title to dock it under or beside the main view, and drag its edge to resize it. Up next has a grip too, which sets the width of both side panes. `find deep house` searches your songs (Liked Songs and the playlists you made) by genre or mood, and `find 124bpm 8A` by tempo and key. `genres` lists the genres and moods you have. Occasions work too (`find party`, `find workout`), `find reggae or dub` matches any of several, `find 2018` lists songs you liked that year, and `top` lists your most played this month. `mix` lists the ones that mix cleanly with the playing song, `like` the ones that sound like it, and `radio` brings new songs like it from all of Spotify. `search daft punk` looks up any song on Spotify by name. End a command with a playlist to look only there: `find house in my track ids`, `set 60m peak in afroset`. `undo` takes back the last play, add or smooth, and puts your music and queue back. `add 1 3 5` queues them. `help` lists every command.
-- **Sets:** `set 60m peak` builds an hour of Liked Songs that starts from the playing song, follows a tempo shape (flat, up, down or peak) and mixes cleanly from song to song. Add a genre to keep it in one style: `set 60m peak house`. `play all` starts it, and `save` keeps any list as a playlist, which Spotify's own Mix and DJ apps can then use.
-- **Plain words, with a model on your own computer:** type a sentence in the console, such as `play something like this but slower` or `queue 3 songs that mix with this`, and a local model picks the commands. It switches the music when you ask it to play, remembers the conversation, and offers follow-ups you can answer, such as saving what it found as a playlist. This part is optional. Connect a model with a free API key, which needs nothing installed, or run one on your own computer with [Ollama](https://ollama.com).
-- **Listening stats** on Home: session, today and this month, plus top songs and artists.
-- **Two looks:** the terminal look (monospace, green borders, green halftone artwork) or Spotify's own look, keeping the layout and the games.
-- **Two views:** the tall games view, or a compact player bar with no games.
+Then he needed to jump on the beat. Then I wanted my queue to flow like a DJ set. Then I wanted to just type "play some stoner music" and have it work.
 
-## Install with your AI assistant
+That's pretty much the whole roadmap. It's a mod for the Spotify desktop app, it's free, and it installs in a few minutes.
 
-Paste this into an AI coding assistant that can run commands on your computer, and it will do the install for you:
+## What you get
+
+### Three games that play along with your music
+
+![The player bar](preview.png)
+
+The playback bar is the ground. The song is the level.
+
+- **Dino, flappy and a shooter.** Switch between them on the bar's top border.
+- **Everything lands on the beat.** Cacti show up so the dino takes off exactly on a beat. Flappy's gravity follows the tempo, so you end up flapping in time without anyone telling you to. The shooter's gun fires on the beat and the aliens march to it.
+- **Auto or play.** On auto it plays itself and the difficulty follows the song's BPM. On play it's yours… `↑` jumps or flaps, `↓` ducks.
+- **Crashing pauses your song.** Which is a genuinely rude thing for software to do, and I love it.
+
+| Flappy | Shooter |
+|---|---|
+| ![Flappy](images/flappy.jpg) | ![The shooter](images/shooter.jpg) |
+
+### A queue that knows tempo and key
+
+![Up next, with tempo and key](images/up-next.png)
+
+Every song in up next shows its BPM and its key on the Camelot wheel (the thing DJs use to tell which songs blend). The numbers light up green when a song mixes cleanly with the one before it.
+
+Hit `[smooth]` and it reorders your next 30 songs so the tempos and keys run into each other. It works on any queue… an album, someone else's playlist, radio. Click again to undo.
+
+### A console you can just talk to
+
+![The console](images/console.png)
+
+Click the prompt in the top bar, or press the backtick key. Then type what you want.
+
+- `play some deep house`
+- `something chill to work to`
+- `play songs like Mi Combi that mix well with it`
+- `find new music like this`
+- `build me an hour set that climbs, and save it as friday`
+- `go back to what I was listening to`
+
+It figures out the genre, the mood or the vibe ("stoner music" turns into psychedelic rock, reggae, dub and trip hop), finds the songs, and plays them. It remembers the conversation, so you can answer "yes, call it warehouse" when it offers to save a playlist.
+
+The console is a real pane, not a pop-up. Drag its title to dock it under or beside the main view, and drag its edge to resize it.
+
+### Sets
+
+`set 60m peak house` builds an hour of your house music that starts from whatever's playing, climbs in tempo, peaks, and eases off… with every song picked to mix into the next one. `save` turns it into a real playlist you can open in Spotify's own Mix feature or a DJ app.
+
+### Two looks
+
+![Spotify's own look](images/spotify-look.jpg)
+
+If the terminal thing isn't your vibe, flip the switch. Same layout, same games, same console, in Spotify's normal look.
+
+There's also lyrics running one line at a time along the top border, listening stats on Home, and a compact view with no games for when you need to act like an adult.
+
+## Install
+
+You need the Spotify desktop app and [Spicetify](https://spicetify.app), which is the tool that lets you mod it.
+
+### The easy way: have an AI assistant do it
+
+Paste this into an AI coding assistant that can run commands on your computer:
 
 ```text
 Install the Spotify Minigame UI theme on my computer:
@@ -45,7 +90,7 @@ Install the Spotify Minigame UI theme on my computer:
 5. Tell me when it's done. Spotify will restart with the theme on.
 ```
 
-## Install by hand
+### By hand
 
 1. Install [Spicetify](https://spicetify.app/docs/getting-started).
 2. Clone this repo into your Spicetify Themes folder:
@@ -67,66 +112,111 @@ Install the Spotify Minigame UI theme on my computer:
 
 Color schemes: `tty` (default), `amber` and `green`. Switch with `spicetify config color_scheme amber && spicetify apply`.
 
-## Built on Spotify's own labels
+## Your first five minutes
 
-Most Spicetify themes style Spotify through Spicetify's class-name map. Spotify scrambles its class names, and the map turns them back into readable ones. Each Spotify update scrambles them again, so a theme built on the map breaks until Spicetify ships a new one.
+1. **Press play on anything.** The dino starts running.
+2. **Give it a minute.** It's quietly indexing your Liked Songs (tempo, key, genre). About a minute for 6,000 songs.
+3. **Press the backtick key** to open the console.
+4. **Connect a model** so you can type plain sentences. More on that right below.
+5. **Type `play some` and a genre you like.**
 
-This theme doesn't use the map. It finds its way around the app with labels Spotify builds in itself: test IDs like `now-playing-bar`, element IDs like `main-view`, and accessibility roles. It keeps working as long as Spotify keeps those labels.
+## Connecting a model
 
-Spicetify is still how the theme loads into the app. You still need it installed, and you still run it after a Spotify update.
+Typed commands work on their own. To type plain sentences, the console needs a language model to translate them. You've got two options.
 
-## Good to know
+### A free API key (nothing to install)
 
-- **Where the switches are:** the controls sit on the player bar's top border: game, mode, level, look and view.
-- **When the beat data is missing:** beat sync and lyrics come from Spotify's own client endpoints. Songs without analysis, and podcasts or local files, play the games without beat sync.
-- **How stats are counted:** the theme keeps the stats itself, in local storage, from the day you install it. A play counts after 30 seconds of listening. Only listening in this Spotify app is counted.
-- **Which songs commands look through:** your Liked Songs plus the playlists you made, read in the background the first time you use the console (about 20 seconds for 200 playlists). `in liked` narrows it to Liked Songs, `in <playlist>` to one playlist, including ones you follow, and `in library` widens it to every playlist you have. `playlists` lists them.
-- **What counts as a clean mix:** tempos within 6% of each other, with half and double time counting as the same tempo, and keys that are the same, one step apart on the Camelot wheel, or major/minor twins. Smooth leaves songs you queued yourself ahead of the rest, the way Spotify plays them.
-- **Where genres come from:** Spotify tags each song with genres and moods, each with a weight, and the theme indexes those alongside tempo and key. The tags are Spotify's and some are wrong: a rap song can carry "new age". A set without a genre is chosen by tempo and key alone, so it can put very different songs side by side. Run `set` again for a different draw.
-- **Where BPM and key come from:** Spotify's own numbers, the ones behind its Mix feature. The theme asks for them in batches and keeps them in local storage, so each song is asked about once. It also indexes your Liked Songs in the background, about a minute for 6,000 songs.
-- **What it's tested on:** Spotify 1.3.9 with Spicetify 2.46.7 on macOS. The theme itself is plain CSS and JavaScript and should run on Windows and Linux, but it hasn't been tested there. `self-repair.sh` and the two Ollama scripts are for macOS only.
-- **After a Spotify update:** Spotify updates wipe Spicetify's changes. On macOS, [self-repair](#self-repair-on-macos) puts the theme back for you. By hand: run `spicetify upgrade`, then `spicetify backup apply`. New Spotify versions often need the newer Spicetify. If the theme is showing and you only want to refresh it, `spicetify apply` is enough.
+![The API key box](images/api-key.png)
 
-## Plain words in the console
+The first time you open the console, it asks for a key. Grab one from any of these, paste it in, and press connect:
 
-The console's commands work on their own. To also type sentences, connect a model. There are two ways.
-
-### With a free API key (nothing to install)
-
-The first time you open the console, it asks for a key. Get one from any of these, paste it in, and press connect:
-
-- [Groq](https://console.groq.com/keys)
+- [Groq](https://console.groq.com/keys) (the one I'd start with)
 - [Google Gemini](https://aistudio.google.com/apikey)
 - [OpenRouter](https://openrouter.ai/keys), which uses its free models
 - [Cerebras](https://cloud.cerebras.ai)
 
-Each has a free tier at the time of writing, with daily limits that are plenty for a music console. The console picks a suitable model from the provider's list. `model` shows which, and `model <name>` switches. `key` brings the box back later, and `key remove` disconnects.
+Each has a free tier at the time of writing, with daily limits that are plenty for a music console. `key` brings the box back later, and `key remove` disconnects.
 
-What to know before you paste a key:
+A few things you should know before you paste a key:
 
-- **Where the key is kept:** in Spotify's own storage on your computer, unencrypted. It is sent only to the provider it belongs to.
-- **What the provider receives:** your sentence, the playing song's name, tempo and key, the genre names in your library, and the first few songs of the last list. Not your whole library, and nothing when you use typed commands.
-- **Another server:** anything that speaks the OpenAI chat format works. Paste its address, a space, then the key, for example `https://example.com/v1 my-key`.
+- **Where the key lives:** in Spotify's own storage on your computer, unencrypted. It only gets sent to the provider it belongs to.
+- **What the provider sees:** your sentence, the playing song's name, tempo and key, the genre names in your library, and the first few songs of the last list. Not your whole library… and nothing at all when you use typed commands.
+- **Another server:** anything that speaks the OpenAI chat format works. Paste its address, a space, then the key, like `https://example.com/v1 my-key`.
 
-### With Ollama, on your own computer
+### Ollama, on your own computer
 
-Nothing you type leaves your computer this way. Install [Ollama](https://ollama.com), which runs language models locally, and a model:
+This is what I use. Nothing you type leaves your machine. Install [Ollama](https://ollama.com) and pull a model:
 
 ```bash
 ollama pull qwen3:8b
 ```
 
-Ollama refuses requests from pages it hasn't been told about, and Spotify's interface is one. On macOS, allow it from the theme's folder:
+Ollama refuses requests from pages it hasn't been told about, and Spotify's interface is one of them. On macOS, allow it from the theme's folder:
 
 ```bash
-sh ollama-allow.sh apply
+sh ollama-allow.sh install
 ```
 
-That lasts until you log out. `sh ollama-allow.sh install` repeats it at every login, and `sh ollama-allow.sh remove` undoes it. On other systems, set `OLLAMA_ORIGINS` to `https://xpui.app.spotify.com` and restart Ollama.
+That sticks across restarts. `sh ollama-allow.sh remove` undoes it. On other systems, set `OLLAMA_ORIGINS` to `https://xpui.app.spotify.com` and restart Ollama.
 
 If a key is saved, the console uses it. Without one, it uses Ollama.
 
-How it works: the model reads your sentence and the playing song, and answers with up to four of the console's own commands, which then run as if you had typed them. It can't do anything the commands can't. It is given the genres and moods in your library, so "play some deep house" or "something chill to work to" searches by tag. A vibe such as "stoner music" or "late night drive" is turned into the few tags that fit it, and the console says which. Answers take a second or two. With Ollama, the first one waits for the model to load, and if another program is keeping Ollama busy, requests wait their turn, and the console drops one after a minute. Ctrl+C drops it sooner. To stop the waiting, `sh ollama-console.sh install` runs a second Ollama that only the console uses (macOS, about 6 GB of memory while its model is loaded). `model` shows which model answers, and `model <name>` switches.
+One gotcha… Ollama answers one request at a time. If something else on your computer keeps it busy, the console waits in line (and gives up after a minute). `sh ollama-console.sh install` runs a second Ollama that only the console uses. It costs about 6 GB of memory while its model is loaded.
+
+## Everything you can type
+
+You don't need to memorize any of this (that's the point of plain words), but every command works on its own with no model connected.
+
+| Type | What happens |
+|---|---|
+| `find deep house` | Your songs by genre or mood. Add a tempo, key or name: `find techno 130-140bpm`, `find 124bpm 8A` |
+| `find party` | Occasions work too: party, workout, study, sleep, relax, dinner |
+| `find reggae or dub` | Any of several genres |
+| `find 2018` | Songs you added that year |
+| `… in my track ids` | End `find`, `mix`, `like` or `set` with a playlist to look only there. Also `in liked` and `in library` |
+| `search daft punk` | Any song on Spotify, by title or artist |
+| `mix` | Your songs that mix cleanly with the one playing. Also `mix slower`, `mix faster`, `mix techno` |
+| `like` | Your songs that sound like the one playing. `like mix` also matches key and tempo. Or name any song: `like blue monday` |
+| `radio` | New songs like this one from all of Spotify. `radio mix` keeps the ones that blend |
+| `set 60m peak` | Build a set. Shapes: flat, up, down, peak. Add a genre or a playlist |
+| `play all` / `play 3` | Play the last list, or one song from it |
+| `add 1 3 5` | Queue songs from the last list. Clicking a row does the same |
+| `undo` | Take back the last play, add or smooth. Your song, your place in it and your queue come back |
+| `smooth` | Reorder the next 30 songs so they flow |
+| `save friday` | Save the last list as a playlist |
+| `top` | Your most played this month |
+| `genres` / `playlists` | What you've got to work with |
+| `now` | The playing song's tempo, key and tags |
+| `key` / `model` | Connect a model, or see which one is answering |
+| `help` | All of the above, inside the console |
+
+"Your songs" means your Liked Songs plus the playlists you made. They get read in the background the first time you use the console (about 20 seconds for 200 playlists).
+
+## What it can't do
+
+It's not a magic button. Honestly, a few things will trip you up:
+
+- **Spotify updates wipe it.** Every update removes the mod, and you run `spicetify upgrade` then `spicetify backup apply` to get it back. On macOS, [self-repair](#self-repair-on-macos) does that for you. That's the deal with modding someone else's app… it's yours until their next update.
+- **I've only tested it on macOS.** Spotify 1.3.9 with Spicetify 2.46.7. The theme itself is plain CSS and JavaScript, so it should run on Windows and Linux, but I haven't tried. `self-repair.sh` and the two Ollama scripts are macOS only.
+- **The genre tags are Spotify's, and some are wrong.** A rap song can show up tagged "new age". Kind of funny, mostly harmless.
+- **Some tempos read double.** A song at 87 BPM might say 174. The mixing logic treats those as the same tempo, so it still works.
+- **The model makes mistakes.** A small local model will sometimes pick the wrong command. It can only run the commands in the table above, so the worst case is the wrong songs… and `undo` fixes that.
+- **It doesn't know your favorites.** There's no play history beyond the current month, no release dates and no lyrics search. Ask for "my favorite song from 2018" and it will tell you it can't know, then play something you added in 2018.
+- **Songs without beat data** (podcasts, local files, a few tracks) play the games without beat sync.
+
+## Under the hood
+
+For the curious.
+
+**It doesn't break the way most Spotify mods do.** Most Spicetify themes style Spotify through Spicetify's class-name map, which Spotify scrambles on every update. This one finds its way around with labels Spotify builds in for itself (test IDs like `now-playing-bar`, element IDs like `main-view`, accessibility roles). Spicetify is still how it loads into the app, so you still need it.
+
+**The music data is Spotify's own.** The desktop app quietly downloads a beat map for every song, plus the tempo, key and genre tags behind its Mix feature. The theme asks for those in batches and keeps them in local storage, so each song is only asked about once.
+
+**A "clean mix" has a definition.** Tempos within 6% of each other (half and double time count as the same) and keys that are the same, one step apart on the Camelot wheel, or major/minor twins.
+
+**The model never touches Spotify.** It reads your sentence and answers with up to four of the console's own commands, which then run as if you typed them. It can't do anything the commands can't.
+
+**Stats are counted locally.** A play counts after 30 seconds of listening, in this Spotify app only, from the day you install.
 
 ## Self-repair on macOS
 
@@ -136,11 +226,11 @@ Every Spotify update removes the theme. Self-repair notices and puts it back. Tu
 sh self-repair.sh install
 ```
 
-It checks at login, every 30 minutes, and whenever Spotify's files change. When the patch is gone, a Terminal window opens, updates Spicetify, re-applies the theme and tells you what it did. If Spotify was opened in the last 3 minutes, it restarts Spotify for you. Otherwise it leaves your music alone and the theme shows the next time Spotify starts.
+It checks at login, every 30 minutes, and whenever Spotify's files change. When the patch is gone, a Terminal window opens, updates Spicetify, re-applies the theme and tells you what it did. If you opened Spotify in the last 3 minutes it restarts it for you. Otherwise it leaves your music alone and the theme shows up the next time Spotify starts.
 
 **Allow Terminal first.** macOS only lets programs you've approved change another app. Open System Settings, then Privacy & Security, then App Management, turn on Terminal, and reopen Terminal.
 
-This matters beyond self-repair. If Spicetify runs from a program macOS is blocking, it can delete Spotify's interface files and then fail to write them back, which leaves Spotify broken until you run `spicetify apply` from a program that's allowed. Self-repair checks that it can write before it starts Spicetify, so a blocked run changes nothing.
+This one matters beyond self-repair. If Spicetify runs from a program macOS is blocking, it can delete Spotify's interface files and then fail to write them back, which leaves Spotify broken until you run `spicetify apply` from a program that's allowed. (I found that out the hard way.) Self-repair checks that it can write before it starts Spicetify, so a blocked run changes nothing.
 
 `sh self-repair.sh status` shows whether it's on and what it last did. `sh self-repair.sh remove` turns it off.
 
@@ -151,3 +241,9 @@ The dino sprites and game constants come from Chromium's dino game (`components/
 ## License
 
 MIT, except the Chromium dino sprites and constants, which keep their BSD license. Both are in [LICENSE](LICENSE).
+
+## Say hi
+
+If you install it, break it, or build something on top of it… tell me. I'm [@iamtava](https://x.com/iamtava) on X and [@tava](https://instagram.com/tava) on Instagram.
+
+My progress bar used to tell me how much of the song was left. Now it tells me whether the dinosaur made it.

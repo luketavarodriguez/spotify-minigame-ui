@@ -2958,7 +2958,7 @@
     // Asked to find or show, not to play: a small model often plays anyway. Don't let it.
     if (/^(find|show|list|search|look up|what|which)\b/i.test(line) && !/\b(play|put on|hear|listen|start|switch)\b/i.test(line) && lines.some((command) => /^play\b/i.test(command))) {
       lines = lines.filter((command) => !/^play\b/i.test(command));
-      reply.say = String(reply.say ?? "").replace(/^(Playing|Switching to)\b/i, "Here are");
+      reply.say = String(reply.say ?? "").replace(/^(Playing|Switching to)\b/i, "Listing");
     }
     chat.push({ role: "user", content: `Request: ${line}` }, { role: "assistant", content: JSON.stringify({ say: reply.say ?? "", commands: lines }) });
     if (chat.length > 12) chat.splice(0, chat.length - 12);
