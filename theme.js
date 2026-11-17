@@ -1791,6 +1791,14 @@
 
   let library = null;
   let libraryAt = 0;
+  // When each song came out, by year. LibraryAPI leaves it out, but the same songs read
+  // as a playlist (spotify:user:@:collection) carry a release date, and so do playlists.
+  const releaseYears = new Map(); // track uri -> year
+  const releasedIn = (uri) => releaseYears.get(uri) ?? 0;
+  const noteRelease = (item) => {
+    const year = Number(item?.release?.isoString?.slice(0, 4));
+    if (year && trackId(item.uri)) releaseYears.set(item.uri, year);
+  };
   const loadLibrary = async () => {
     if (library && Date.now() - libraryAt < 600000) return library;
     const songs = [];
@@ -1806,6 +1814,16 @@
     library = songs;
     libraryAt = Date.now();
     wantSongs(songs.map((song) => song.uri), false);
+    // Release years arrive in the background. Until they do, a decade search finds fewer songs.
+    if (!releaseYears.size)
+      (async () => {
+        for (let offset = 0; ; offset += 500) {
+          const page = await S.Platform.PlaylistAPI.getContents("spotify:user:@:collection", { limit: 500, offset });
+          const items = page?.items ?? [];
+          items.forEach(noteRelease);
+          if (items.length < 500) break;
+        }
+      })().catch(() => {});
     return songs;
   };
 
@@ -1919,6 +1937,7 @@
       const items = page?.items ?? [];
       for (const item of items) {
         if (!trackId(item.uri)) continue;
+        noteRelease(item);
         songs.push({ uri: item.uri, name: item.name ?? "", artists: (item.artists ?? []).map((artist) => artist.name).join(", "), ms: item.duration?.milliseconds ?? 0, year: item.addedAt ? new Date(item.addedAt).getFullYear() : 0 });
       }
       if (items.length < 500) break;
@@ -2463,6 +2482,7 @@
         ["find party", "occasions work too: party, workout, study, sleep, relax, dinner"],
         ["find reggae or dub", "any of several genres or moods"],
         ["find 2018", "songs you liked that year. Mix it in: find house 2018"],
+        ["find 90s", "songs released in the 90s. Also find 1995-1999 and find released 2018. Mix it in: find house 90s"],
         ["top", "your most played songs this month"],
         ["mix", "your songs that mix cleanly with this one. Also: mix techno"],
         ["mix slower", "the same keys, a step down in tempo. Also: mix faster"],
@@ -2536,19 +2556,37 @@
       let near = 0;
       let key = "";
       let year = 0;
+      let era = null; // [from, to] release years
       const words = [];
-      for (const arg of args) {
+      for (let i = 0; i < args.length; i += 1) {
+        const arg = args[i];
+        const decade = /^(19|20)?(\d)0'?s$/i.exec(arg);
+        const years = /^((?:19|20)\d\d)-((?:19|20)\d\d)$/.exec(arg);
+        if (decade) {
+          const start = Number(decade[1] ? `${decade[1]}${decade[2]}0` : `${Number(decade[2]) >= 3 ? 19 : 20}${decade[2]}0`);
+          era = [start, start + 9];
+          continue;
+        }
+        if (years) {
+          era = [Number(years[1]), Number(years[2])].sort((a, b) => a - b);
+          continue;
+        }
+        if (/^released$/i.test(arg) && /^(19|20)\d\d$/.test(args[i + 1] ?? "")) {
+          era = [Number(args[i + 1]), Number(args[i + 1])];
+          i += 1;
+          continue;
+        }
         const range = /^(\d{2,3})-(\d{2,3})(?:bpm)?$/i.exec(arg);
         const tempo = /^(\d{2,3})bpm$/i.exec(arg);
         const wheel = /^(1[0-2]|[1-9])([ab])$/i.exec(arg);
         if (range) [low, high] = [Number(range[1]), Number(range[2])];
         else if (tempo) near = Number(tempo[1]);
         else if (wheel) key = `${wheel[1]}${wheel[2].toUpperCase()}`;
-        else if (/^(19|20)\d\d$/.test(arg)) year = Number(arg); // The year you liked the song. Spotify doesn't say here when it was released.
+        else if (/^(19|20)\d\d$/.test(arg)) year = Number(arg); // A plain year is the year you liked the song. find 90s, 1995-1999 or released 2018 is when it came out.
         else words.push(arg.toLowerCase());
       }
       if (!args.length) {
-        print("find what? Try: find deep house, find 124bpm 8A, find techno 130-140bpm, find 2018, or find a name", "dim");
+        print("find what? Try: find deep house, find 124bpm 8A, find techno 130-140bpm, find house 90s, find 2018, or find a name", "dim");
         return;
       }
       // "find me some sad indie" is a sentence, not a search for the words "me" and "some".
@@ -2565,6 +2603,7 @@
           if (high && (facts[0] < low || facts[0] > high)) return false;
           if (key && facts[1] !== key) return false;
           if (year && song.year !== year) return false;
+          if (era && !(releasedIn(song.uri) >= era[0] && releasedIn(song.uri) <= era[1])) return false;
           if (!weights.every((weight, i) => weight > 0 || (loose && text.includes(tags[i].word)))) return false;
           return extra.every((word) => text.includes(word));
         })
@@ -2590,12 +2629,14 @@
       // A genre with many matches is shuffled a little, so it isn't the same 20 every time.
       if (near) songs.sort((a, b) => tempoApart(near, a.facts[0]) - tempoApart(near, b.facts[0]));
       else if (high) songs.sort((a, b) => a.facts[0] - b.facts[0]);
-      else if (tags.length || year) for (const entry of songs) entry.strength += songs.length > 20 ? Math.random() * (tags.length ? 0.3 : 1) : 0;
-      if ((tags.length || year) && !near && !high) songs.sort((a, b) => b.strength - a.strength);
+      else if (tags.length || year || era) for (const entry of songs) entry.strength += songs.length > 20 ? Math.random() * (tags.length ? 0.3 : 1) : 0;
+      if ((tags.length || year || era) && !near && !high) songs.sort((a, b) => b.strength - a.strength);
       const spread = high && songs.length > 20;
       const shown = (spread ? Array.from({ length: 20 }, (_, i) => songs[Math.floor((i * songs.length) / 20)]) : songs.slice(0, 20)).map((entry) => entry.song);
-      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` added in ${year}` : ""}`;
-      const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : year && !tags.length && !near ? ", 20 at random:" : ", first 20:") : ":";
+      const eraName = era ? (era[0] === era[1] ? `released in ${era[0]}` : era[1] - era[0] === 9 && era[0] % 10 === 0 ? `released in the ${era[0]}s` : `released ${era[0]} to ${era[1]}`) : "";
+      const tagged = `${tags.length ? ` tagged ${tags.map((tag) => tag.name).join(" and ")}` : ""}${year ? ` added in ${year}` : ""}${era ? ` ${eraName}` : ""}`;
+      const which = spread ? ", 20 spread across the range:" : songs.length > 20 ? (tags.length && !near ? ", 20 of the strongest:" : (year || era) && !tags.length && !near ? ", 20 at random:" : ", first 20:") : ":";
+      if (era && !songs.length && !releaseYears.size) print("release years are still loading. Try again in a few seconds", "dim");
       print(songs.length ? `${songs.length} ${noun}${tagged}${which}` : `nothing among ${noun.replace(/^of /, "")} matches. genres lists the genres and moods you can search, and search looks through all of Spotify`, songs.length ? "" : "dim");
       printSongs(shown);
       resultsName = `Find: ${args.join(" ")}`;
@@ -3061,11 +3102,12 @@
     "Commands:",
     "find <genre or mood> <words> <N>bpm <key>   list songs from the user's own songs, which are their Liked Songs and the playlists they made. All parts are optional. Genre and mood names must come from the tag list given with each request, for example: find deep house, find chill hip hop. <N>bpm is a tempo, and a range is written like 120-128bpm. <key> is a Camelot code such as 8A or 11B. Other words match song titles and artist names.",
     "find <year>   list songs the user added in that year, for example: find 2018, or find house 2018. This is the year they saved the song, not the year it came out.",
+    "find <decade> or find released <year>   list songs by when they came out, for example: find 80s, find house 90s, find 1995-1999, find released 2019.",
     "search <words>   list songs from Spotify's whole catalog by title or artist. Use it when the user asks for a specific song or artist by name, since it may not be among their songs.",
     "playlists   list the user's playlists.",
     "find, mix, like and set can end with in <playlist name> to look only inside that playlist, with in liked for Liked Songs only, or with in library for every playlist they follow too. Example: find techno in house edm.",
     "top   list the user's most played songs this month. This is the only play count there is.",
-    'A year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. Only "released", "came out" or a decade can\'t be done.',
+    'A plain year in a request ("from 2019", "in 2021") means the year the user liked the songs, so use find with that year. "Released", "came out", "new in" or a decade means when songs came out: use find <decade> or find released <year>.',
     "mix <genre>   list the user's songs that mix cleanly with the playing song: a matching key and a tempo within 6%. The genre is optional. mix slower lists ones 4% to 15% slower, mix faster 4% to 15% faster. mix does not look at how songs sound.",
     "like <song>   list the user's songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi, and can be any song on Spotify. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
     "radio <song>   list songs from Spotify's whole catalog that are like a song and are not among the user's songs. Without a song it uses the playing one, and a named song can be any song on Spotify. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
@@ -3087,7 +3129,7 @@
     'Words such as like, similar to, more of this and in this style mean like, never mix alone. Use mix alone only when the user asks purely about mixing, blending or transitions. New, discover, recommend, or something I have not heard mean radio.',
     "Never answer a question about the playing song from memory. Use now.",
     "A new request needs a new list. Use play <number> or add on the last list only when the user is plainly talking about that list (play the third one, add those).",
-    "Be honest about what the console can't know: which songs are the user's favorites, what is best, when a song was released, or lyrics. Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
+    "Be honest about what the console can't know: which songs are the user's favorites, what is best, or lyrics. Don't pretend. Say what you can't tell, do the nearest real thing, and say what that is.",
     '"say" is one or two short plain sentences: what you are doing, or a question. After playing or listing songs you may end with one offer, such as: Want these saved as a playlist?',
     "Nothing happens unless its command is in commands. Never say you are saving, playing or queueing without the command for it.",
     "The conversation continues across requests. If the user says yes, or gives a name, act on your last offer with its command. A playlist needs a name: if the user agreed but gave none, ask what to call it and give no commands. Once you have the name, the command is save <name>.",
@@ -3103,7 +3145,8 @@
     'Request: queue 5 hip hop songs from 2019 -> {"say": "Queueing five hip hop songs you added in 2019.", "commands": ["find hip hop 2019", "add 1 2 3 4 5"]}',
     'Request: chill songs I liked in 2020 -> {"say": "Here are chill songs you added in 2020.", "commands": ["find chill 2020"]}',
     'Request: play some house from 2019 and save it as throwback -> {"say": "Playing house you added in 2019 and saving it as throwback.", "commands": ["find house 2019", "play all", "save throwback"]}',
-    'Request: play something released in the 90s -> {"say": "I can\'t tell when a song was released, only when you liked it. Tell me a genre or a mood and I will play that.", "commands": []}',
+    'Request: play something released in the 90s -> {"say": "Playing songs of yours from the 90s.", "commands": ["find 90s", "play all"]}',
+    'Request: songs that came out in 2019 -> {"say": "Here are your songs released in 2019.", "commands": ["find released 2019"]}',
     'Request: play songs like this -> {"say": "Playing songs of yours that sound like this one.", "commands": ["like", "play all"]}',
     'Request: play songs like Mi Combi by Ollie BC that mix well with it -> {"say": "Playing songs of yours that sound like Mi Combi and mix cleanly with it.", "commands": ["like mi combi mix", "play all"]}',
     'Request: find songs like Mi Combi that mix well with it -> {"say": "Here are songs of yours that sound like Mi Combi and mix cleanly with it. Want me to play them?", "commands": ["like mi combi mix"]}',

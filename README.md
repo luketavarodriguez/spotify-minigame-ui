@@ -182,6 +182,7 @@ You don't need to memorize any of this (that's the point of plain words), but ev
 | `find party` | Occasions work too: party, workout, study, sleep, relax, dinner |
 | `find reggae or dub` | Any of several genres |
 | `find 2018` | Songs you added that year |
+| `find 90s` | Songs released in the 90s. `find house 90s`, `find 1995-1999` and `find released 2018` work too |
 | `… in my track ids` | End `find`, `mix`, `like` or `set` with a playlist to look only there. Also `in liked` and `in library` |
 | `search daft punk` | Any song on Spotify, by title or artist |
 | `mix` | Your songs that mix cleanly with the one playing. Also `mix slower`, `mix faster`, `mix techno` |
@@ -211,7 +212,7 @@ It's not a magic button. Honestly, a few things will trip you up:
 - **The genre tags are Spotify's, and some are wrong.** A rap song can show up tagged "new age". Kind of funny, mostly harmless.
 - **Some tempos read double.** A song at 87 BPM might say 174. The mixing logic treats those as the same tempo, so it still works.
 - **The model makes mistakes.** A small local model will sometimes pick the wrong command. It can only run the commands in the table above, so the worst case is the wrong songs… and `undo` fixes that.
-- **It doesn't know your favorites.** There's no play history beyond the current month, no release dates and no lyrics search. Ask for "my favorite song from 2018" and it will tell you it can't know, then play something you added in 2018.
+- **It doesn't know your favorites.** There's no play history beyond the current month and no lyrics search. Ask for "my favorite song from 2018" and it will tell you it can't know, then play something you added in 2018.
 - **Songs without beat data** (podcasts, local files, a few tracks) play the games without beat sync.
 
 ## Under the hood

@@ -22,7 +22,9 @@
     { "say": "what have I been listening to most", "expect": ["^top$"] },
     { "say": "tidy up my queue", "expect": ["^smooth$"] },
     { "say": "go back to what I was listening to", "expect": ["^undo$"] },
-    { "say": "play something released in the 80s", "expect": [] },
+    { "say": "play something released in the 80s", "expect": ["^find 80s$", "^play all$"] },
+    { "say": "put on some 90s house", "expect": ["^find (house 90s|90s house)$", "^play all$"] },
+    { "say": "show me songs that came out in 2019", "expect": ["^find released 2019$"] },
     { "say": "what is the weather", "expect": [] },
     {
       "say": "yes, call it sunday morning",

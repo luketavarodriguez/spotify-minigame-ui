@@ -82,7 +82,8 @@ None of this is documented by Spotify. It was found by reading the app. Any of i
 - **`PlayerAPI`**: `_state` (read directly: `item`, `nextItems`, `context`, `positionAsOfTimestamp`, `timestamp`, `isPaused`, `shuffle`). Each queue item has `uri`, `uid` and `provider` (`context`, `queue` or `autoplay`). Commands: `play(context, origin, options)`, `skipTo({uid, uri})`, `seekTo(ms)`, `pause()`, `resume()`, `setShuffle(bool)`, `addToQueue([{uri}])`, `removeFromQueue`, `clearQueue()`, `reorderQueue(items, {before: anchor})`.
 - **`reorderQueue`** does a whole permutation in one call: pass the items in the wanted order and an anchor (the first song after the group, or the group's own last song). Spotify matches by `uid`, else `uri`. If the anchor is a queued song, the moved ones become queued too.
 - **Playing a playlist from a given song**: `play({uri: listUri}, {featureIdentifier: "playlist", referrerIdentifier: "other"}, {skipTo: {uri, uid}, seekTo: ms})`.
-- **`LibraryAPI.getTracks({limit, offset})`**: Liked Songs, with `addedAt`.
+- **`LibraryAPI.getTracks({limit, offset})`**: Liked Songs, with `addedAt` but no release date.
+- **`PlaylistAPI.getContents("spotify:user:@:collection", {limit, offset})`**: Liked Songs read as a playlist. Each item has `release.isoString`, which is where release years come from (`releaseYears` in `theme.js`). It returned about 250 more items than `LibraryAPI` on one library; the theme keeps `LibraryAPI` as the song list and only takes years from this. Playlist items also carry `bpm`, `key` and `threeBandWaveform` fields, null on the items checked. Not explored.
 - **`RootlistAPI`**: `getContents()`, `createPlaylist(name, {before: "start"})`, `remove([{uri}])`.
 - **`PlaylistAPI`**: `getContents(uri, {limit, offset})`, `getMetadata(uri)`, `add(uri, uris, {after: "end"})`, `remove(uri, [{uri, uid}])`, `updateDetails(uri, {name})`.
 - **`PlaylistMixingAPI`**: see [Sets and the DJ](#sets-and-the-dj).
@@ -144,7 +145,7 @@ These grades know tempo and key only. Two songs can grade clean and still clash 
 - `commands` in `theme.js` is the whole list. A command returns the `ASK` symbol when its arguments read like a sentence, and the line then goes to the model.
 - The pool is Liked Songs plus owned playlists. A trailing `in <playlist>`, `in liked` or `in library` changes it (`readScope`, `songsFor`).
 - `readTags` takes the longest phrase that is an exact tag name and also matches its relatives ("techno" matches "minimal techno"). `a or b` is a union. `OCCASIONS` maps words such as party and workout to real tags, because "party" used to match song titles. An exact artist name is never read as a tag.
-- `find <year>` means the year a song was liked. Release year is not available for library songs. `top` is this month's plays as counted by the theme. The console says so when asked for things it can't know.
+- `find <year>` means the year a song was liked. `find 90s`, `find 1995-1999` and `find released 2018` mean when it came out. `top` is this month's plays as counted by the theme. The console says so when asked for things it can't know.
 - `like` ranks by shared tags (genres count double). `mix` is tempo and key only. `radio` is Spotify's song radio minus songs already in the pool.
 - `undo` covers play, add, smooth and dj through `undoPlan = {done, run}`.
 
