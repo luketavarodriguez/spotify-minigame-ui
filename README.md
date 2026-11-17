@@ -50,6 +50,7 @@ Click the prompt in the top bar, or press the backtick key. Then type what you w
 - `play songs like Mi Combi that mix well with it`
 - `find new music like this`
 - `build me an hour set that climbs, and save it as friday`
+- `DJ for me for an hour, start with deep house and end on techno`
 - `go back to what I was listening to`
 
 It figures out the genre, the mood or the vibe ("stoner music" turns into psychedelic rock, reggae, dub and trip hop), finds the songs, and plays them. It remembers the conversation, so you can answer "yes, call it warehouse" when it offers to save a playlist.
@@ -59,6 +60,14 @@ The console is a real pane, not a pop-up. Drag its title to dock it under or bes
 ### Sets
 
 `set 60m peak house` builds an hour of your house music that starts from whatever's playing, climbs in tempo, peaks, and eases off… with every song picked to mix into the next one. `save` turns it into a real playlist you can open in Spotify's own Mix feature or a DJ app.
+
+### An AI DJ
+
+`dj 90 minutes, start with deep house, build to techno` and it does what a DJ does. It plans the set in phases (genres, tempo, how long the blends should be), picks songs from your library that fit each phase and mix into each other, and writes a transition for every pair: where to leave one song, where to bring in the next, and for how many bars. Then it presses play, and Spotify's own mixing engine performs it, beatmatched.
+
+`dj plan …` shows you the plan without playing anything. `dj keep friday` keeps the set as its own playlist, transitions included. `undo` puts your music back.
+
+(This one needs Spotify Premium, since it runs on Spotify's Mix feature.)
 
 ### Two looks
 
@@ -179,6 +188,7 @@ You don't need to memorize any of this (that's the point of plain words), but ev
 | `like` | Your songs that sound like the one playing. `like mix` also matches key and tempo. Or name any song: `like blue monday` |
 | `radio` | New songs like this one from all of Spotify. `radio mix` keeps the ones that blend |
 | `set 60m peak` | Build a set. Shapes: flat, up, down, peak. Add a genre or a playlist |
+| `dj <brief>` | Plan, mix and play a DJ set with real transitions. `dj plan <brief>` only shows it, `dj keep <name>` keeps it |
 | `play all` / `play 3` | Play the last list, or one song from it |
 | `add 1 3 5` | Queue songs from the last list. Clicking a row does the same |
 | `undo` | Take back the last play, add or smooth. Your song, your place in it and your queue come back |
@@ -213,6 +223,8 @@ For the curious.
 **The music data is Spotify's own.** The desktop app quietly downloads a beat map for every song, plus the tempo, key and genre tags behind its Mix feature. The theme asks for those in batches and keeps them in local storage, so each song is only asked about once.
 
 **A "clean mix" has a definition.** Tempos within 6% of each other (half and double time count as the same) and keys that are the same, one step apart on the Camelot wheel, or major/minor twins.
+
+**The DJ can't hear, so it leans on Spotify, which can.** Every transition starts from the one Spotify's Mix would use (it has the audio). The DJ only moves it by whole bars to make a blend longer or shorter, so the beats and phrases stay lined up. If Spotify picked a very short blend, the DJ leaves it alone, since there's usually a reason. The set lives in a playlist called "AI DJ (working set)" that gets reused each time.
 
 **The model never touches Spotify.** It reads your sentence and answers with up to four of the console's own commands, which then run as if you typed them. It can't do anything the commands can't.
 

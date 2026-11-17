@@ -74,6 +74,30 @@
   labelLayout();
   setInterval(labelLayout, 250);
 
+  // A wait that keeps time when Spotify's window is hidden. Chrome slows a hidden
+  // page's timers to about one a minute, which would stretch a three-second wait
+  // into minutes. A worker's timer isn't slowed, so the wait runs there.
+  let napper = null;
+  const naps = new Map();
+  let napCount = 0;
+  const nap = (ms) =>
+    new Promise((resolve) => {
+      try {
+        if (!napper) {
+          napper = new Worker(URL.createObjectURL(new Blob(["onmessage = (e) => setTimeout(() => postMessage(e.data[0]), e.data[1]);"], { type: "text/javascript" })));
+          napper.onmessage = (event) => {
+            naps.get(event.data)?.();
+            naps.delete(event.data);
+          };
+        }
+        napCount += 1;
+        naps.set(napCount, resolve);
+        napper.postMessage([napCount, ms]);
+      } catch {
+        setTimeout(resolve, ms);
+      }
+    });
+
   const state = () => player._state ?? {};
 
   const position = (s) => {
@@ -1446,7 +1470,7 @@
       indexDelay = Math.min(indexDelay * 4, 600000); // Back off, up to 10 minutes.
     }
     indexBusy = false;
-    if (wantedNow.size || wantedLater.size) setTimeout(pumpIndex, wantedNow.size ? 300 : indexDelay);
+    if (wantedNow.size || wantedLater.size) nap(wantedNow.size ? 300 : indexDelay).then(pumpIndex);
   };
 
   const trackId = (uri) => (/^spotify:track:([A-Za-z0-9]{22})$/.exec(uri ?? "") ?? [])[1];
@@ -1468,7 +1492,7 @@
       if (!wanted.has(id)) added = true;
       wanted.add(id);
     }
-    if (added && !indexBusy) setTimeout(pumpIndex, now ? 0 : indexDelay);
+    if (added && !indexBusy) nap(now ? 0 : indexDelay).then(pumpIndex);
   };
 
   // Liked Songs, a page at a time. Only songs not yet in the index are asked about.
@@ -1482,7 +1506,7 @@
       }
     } catch {}
   };
-  setTimeout(indexLibrary, 20000);
+  nap(20000).then(indexLibrary);
 
   // ---- Up next, on the right -----------------------------------------------------
   //
@@ -1642,7 +1666,7 @@
       const next = upcoming();
       const at = next.findIndex((item) => sameSong(item, wanted[0]));
       if (at >= 0 && wanted.every((item, i) => sameSong(next[at + i], item))) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await nap(100);
     }
   };
 
@@ -1681,7 +1705,7 @@
       const ahead = upcoming().slice(0, SMOOTH_WINDOW);
       wantSongs([current, ...ahead.map((item) => item.uri)], true);
       for (let tries = 0; tries < 20 && ahead.some((item) => trackId(item.uri) && !songFacts(item.uri) && !indexMisses.has(trackId(item.uri))); tries += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 150)); // Numbers for songs just outside the pane are still arriving.
+        await nap(150); // Numbers for songs just outside the pane are still arriving.
       }
       const before = cleanCount(current, ahead);
       const groups = smoothGroups();
@@ -1946,7 +1970,7 @@
         await readSeveral(wanted);
       } else {
         // Don't hold a command up for the background read: wait a few seconds at most.
-        await Promise.race([readOwn(), new Promise((resolve) => setTimeout(resolve, 4000))]);
+        await Promise.race([readOwn(), nap(4000)]);
         const left = wanted.filter((list) => !list.songs).length;
         if (left) print(`still reading your playlists: ${wanted.length - left} of ${wanted.length} so far. Results will grow over the next few seconds.`, "dim");
       }
@@ -1980,15 +2004,69 @@
   // Tempos, keys and tags for songs just found: asked for now, waited on briefly.
   const learnSongs = async (songs) => {
     wantSongs(songs.map((song) => song.uri), true);
-    for (let tries = 0; tries < 25 && songs.some((song) => !songTags.has(trackId(song.uri)) && !indexMisses.has(trackId(song.uri))); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    for (let tries = 0; tries < 25 && songs.some((song) => !songTags.has(trackId(song.uri)) && !indexMisses.has(trackId(song.uri))); tries += 1) await nap(100);
   };
 
   // What undo would reverse: the last play or add. { done: what to say, run }
   let undoPlan = null;
   const queuedNow = () => upcoming().filter((next) => next.provider === "queue");
   const settle = async (done) => {
-    for (let tries = 0; tries < 30 && !done(); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    for (const until = Date.now() + 3000; !done() && Date.now() < until; ) await nap(100);
     return done();
+  };
+  // Spotify's player sometimes never answers a command it has already carried out
+  // (a jump to a song that isn't where it expected). Wait a few seconds at most.
+  const within = (command, ms = 4000) => Promise.race([Promise.resolve(command).catch(() => null), nap(ms)]);
+  // Go back to where the music was: the playlist or album, the song, the place in it,
+  // paused or not, and the queue. A song that was playing from the queue goes back
+  // through the queue, since it has no place of its own in the playlist.
+  const whereItWas = () => {
+    const now = state();
+    // A song from the queue, or one Spotify added after the playlist ran out, has no place in the playlist.
+    const fromQueue = Boolean(now.item) && now.item.provider !== "context";
+    const place = fromQueue ? (now.nextItems ?? []).find((next) => next.provider === "context") : now.item;
+    return {
+      ctx: now.context?.uri,
+      uri: now.item?.uri,
+      fromQueue,
+      place: place ? { uri: place.uri, uid: place.uid } : null,
+      at: (now.positionAsOfTimestamp ?? 0) + (now.isPaused ? 0 : Date.now() - (now.timestamp ?? Date.now())),
+      paused: now.isPaused !== false,
+      shuffle: Boolean(now.shuffle),
+      queued: queuedNow().map((next) => next.uri),
+    };
+  };
+  const goBack = async (was) => {
+    const player = S.Platform.PlayerAPI;
+    if (was.shuffle !== Boolean(state().shuffle)) await within(player.setShuffle(was.shuffle));
+    const at = Math.max(0, Math.floor(was.at));
+    if (was.ctx) {
+      await within(player.play({ uri: was.ctx }, { featureIdentifier: "playlist", referrerIdentifier: "other" }, was.place ? { skipTo: was.place, ...(was.fromQueue ? {} : { seekTo: at }) } : {}));
+      await settle(() => state().context?.uri === was.ctx);
+    }
+    if ((was.fromQueue || !was.ctx || !was.place) && trackId(was.uri)) {
+      // Spotify drops a queue change sent while it is settling from a jump: wait, send, check, and try again.
+      let back = null;
+      for (let attempt = 0; attempt < 3 && !back; attempt += 1) {
+        await nap(700);
+        await within(player.addToQueue([{ uri: was.uri }]));
+        back = await settle(() => queuedNow().find((next) => next.uri === was.uri));
+      }
+      if (back) {
+        await within(player.skipTo({ uid: back.uid, uri: back.uri }));
+        await settle(() => state().item?.uri === was.uri);
+        await within(player.seekTo(at));
+      }
+    }
+    if (was.paused) await within(player.pause());
+    // The old queue goes back last. Spotify drops a queue change sent while it is
+    // still settling from a jump, so wait, check it took, and send it again if not.
+    const missing = () => was.queued.filter((uri) => !queuedNow().some((next) => next.uri === uri));
+    for (let attempt = 0; attempt < 3 && missing().length; attempt += 1) {
+      await nap(700);
+      await within(player.addToQueue(missing().map((uri) => ({ uri }))));
+      await settle(() => !missing().length);
+    }
   };
 
   // Which of the words name a genre or mood? The longest phrase wins, so
@@ -2168,6 +2246,194 @@
     return { songs: set, ms: elapsed, base };
   };
 
+  // ---- DJ: a brief becomes a planned, mixed set ----
+  //
+  // dj <brief> does what a DJ does before and during a set. The model reads
+  // the brief and writes a plan: phases, each with genres, a tempo range and
+  // a blend length. Code picks songs that fit each phase and mix into each
+  // other, puts them in a playlist, and writes a transition for every pair:
+  // where to leave one song, where to enter the next, and for how many bars.
+  // Spotify's own mixing engine plays them. Each transition starts from
+  // Spotify's suggestion (it can hear the songs, nothing here can) and is
+  // lengthened or shortened by whole bars, so beats and phrases stay lined up.
+  const DJ_LIST = "AI DJ (working set)";
+  const DJ_BARS = { long: 16, medium: 8, quick: 4 };
+  const DJ_PLAN = {
+    type: "object",
+    properties: {
+      name: { type: "string" },
+      minutes: { type: "number" },
+      phases: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { part: { type: "number" }, tags: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, from_bpm: { type: "number" }, to_bpm: { type: "number" }, blend: { type: "string", enum: ["long", "medium", "quick"] } },
+          required: ["part", "tags", "from_bpm", "to_bpm", "blend"],
+        },
+        minItems: 2,
+        maxItems: 4,
+      },
+    },
+    required: ["name", "minutes", "phases"],
+  };
+  const DJ_GUIDE = [
+    'You plan DJ sets. Turn the brief into a plan. Answer with JSON only, in this shape: {"name": "...", "minutes": 60, "phases": [{"part": 0.3, "tags": ["deep house"], "from_bpm": 118, "to_bpm": 122, "blend": "long"}]}.',
+    "name: two to four words for the set.",
+    "minutes: the length the brief asks for, or 60.",
+    "phases: two to four, in the order they play. part is each phase's share of the set, and the parts add up to 1.",
+    "tags: one, two or at most three names copied exactly from the tag list. Never more than three. A song fits the phase if it carries any of them. Pick the genres or moods the brief wants at that point of the set.",
+    "from_bpm and to_bpm: the tempo at the start and the end of the phase. Use tempos that are normal for those genres. Tempo moves gradually: each phase starts within 6 BPM of where the one before it ended.",
+    "blend: how songs run into each other in that phase. long for deep, smooth or warm-up music, medium for most music, quick for high-energy peaks.",
+    "If the brief doesn't say how the set should move, start easy, build to a peak around two thirds in, and ease off a little at the end.",
+  ].join("\n");
+
+  // The plan for a brief. With no model connected, a plain one: the genres in the brief, tempo rising then easing.
+  const planSet = async (brief, songs) => {
+    const minutes = Math.min(240, Math.max(15, Number((/(\d{2,3})\s*(?:m|min|mins|minutes)\b/i.exec(brief) ?? /\b(\d{2,3})\b/.exec(brief) ?? [])[1]) || 60));
+    let plan = null;
+    try {
+      const who = await answerer();
+      if (who.model) {
+        const known = commonTags(songs).filter((tag) => tag[1] !== "o" && tag[2] >= 8).slice(0, 160).map((tag) => tag[0]).join(", ");
+        const item = state().item;
+        const facts = songFacts(item?.uri);
+        plan = await think(who, [{ role: "system", content: DJ_GUIDE }, { role: "user", content: `Tag list: ${known}.\nPlaying now: ${item ? `${item.name}${facts ? `, ${Math.round(facts[0])} BPM` : ""}` : "nothing"}.\nBrief: ${brief}` }], DJ_PLAN, AbortSignal.timeout(60000));
+      }
+    } catch {}
+    const words = brief.toLowerCase().replace(/[^a-z0-9&' -]/g, " ").split(/\s+/).filter(Boolean);
+    if (!plan?.phases?.length) {
+      // No model: use whatever genre words the brief has, and the middle of their tempo range.
+      const { tags } = readTags(words.filter((word) => !/^\d+$/.test(word)), songs);
+      const tempos = songs.filter((song) => tags.every((tag) => tagWeight(song.uri, tag) > 0)).map((song) => songFacts(song.uri)?.[0]).filter((bpm) => bpm > 80 && bpm < 180).sort((a, b) => a - b);
+      const at = (share) => Math.round(tempos[Math.floor(tempos.length * share)] ?? 122);
+      const names = tags.map((tag) => tag.word);
+      plan = { name: names.join(" ") || "Mixed set", minutes, phases: [{ part: 0.3, tags: names, from_bpm: at(0.3), to_bpm: at(0.45), blend: "long" }, { part: 0.45, tags: names, from_bpm: at(0.45), to_bpm: at(0.7), blend: "medium" }, { part: 0.25, tags: names, from_bpm: at(0.7), to_bpm: at(0.55), blend: "medium" }] };
+    }
+    // Keep only what can be used: real tags, sane numbers, parts that add up to 1.
+    const phases = plan.phases.slice(0, 5).map((phase) => {
+      const names = (Array.isArray(phase.tags) ? phase.tags : []).map((tag) => String(tag).toLowerCase()).filter((tag) => tagNumber.has(tag) || OCCASIONS[tag]).slice(0, 3);
+      const read = names.length ? readTags(names.join(" or ").split(" "), songs).tags : [];
+      const from = Math.min(200, Math.max(60, Number(phase.from_bpm) || 120));
+      return { part: Math.max(0.05, Number(phase.part) || 0.3), names, tags: read, from, to: Math.min(200, Math.max(60, Number(phase.to_bpm) || from)), blend: DJ_BARS[phase.blend] ? phase.blend : "medium" };
+    });
+    const whole = phases.reduce((sum, phase) => sum + phase.part, 0);
+    for (const phase of phases) phase.part /= whole;
+    return { name: String(plan.name || "Mixed set").slice(0, 40), minutes: Math.min(240, Math.max(15, Number(plan.minutes) || minutes)), phases };
+  };
+
+  // Songs for the plan, phase by phase: each one fits the phase's genres, sits near the
+  // tempo the phase has reached, and mixes into the one before it.
+  const pickSet = (plan, songs) => {
+    const length = plan.minutes * 60000;
+    const set = [];
+    const used = new Set();
+    let elapsed = 0;
+    let last = null;
+    let begins = 0;
+    for (const phase of plan.phases) {
+      const ends = begins + phase.part * length;
+      const pool = songs.filter((song) => {
+        const facts = songFacts(song.uri);
+        return facts?.[0] && facts[1] && song.ms > 90000 && song.ms < 600000 && (!phase.tags.length || phase.tags.some((tag) => tagWeight(song.uri, tag) > 0));
+      });
+      phase.pool = pool.length;
+      phase.first = set.length;
+      while (elapsed < ends) {
+        const target = phase.from + (phase.to - phase.from) * Math.min(1, Math.max(0, (elapsed - begins) / (ends - begins)));
+        const recent = set.slice(-4).map((song) => song.artists);
+        const stuck = set.length > 1 && songFacts(set.at(-2).uri)[1] === last?.[1] ? last[1] : "";
+        let best = null;
+        let bestScore = Infinity;
+        for (const song of pool) {
+          if (used.has(song.uri)) continue;
+          const facts = songFacts(song.uri);
+          const off = Math.abs(facts[0] - target) / target; // The real tempo, not its half or double: a set stays in one tempo range.
+          const fit = phase.tags.length ? Math.max(...phase.tags.map((tag) => tagWeight(song.uri, tag))) : 0.5;
+          const score = (last ? transition(last, facts).cost : 0) + Math.min(off / 0.03, 8) + (recent.includes(song.artists) ? 2 : 0) + (facts[1] === stuck ? 0.8 : 0) - fit + Math.random() * 0.4;
+          if (score < bestScore) {
+            best = song;
+            bestScore = score;
+          }
+        }
+        if (!best || (set.length && elapsed + best.ms / 2 > length)) break;
+        set.push({ ...best, blend: phase.blend });
+        used.add(best.uri);
+        elapsed += best.ms;
+        last = songFacts(best.uri);
+      }
+      begins = ends;
+    }
+    return { songs: set, ms: elapsed };
+  };
+
+  // The transition to write for a pair, or null to leave Spotify's own. Spotify's
+  // suggestion fixes where the next song enters and where the blend ends; a longer
+  // blend starts earlier in the outgoing song, by whole bars.
+  const planBlend = (auto, blend, grade, longest) => {
+    const overlap = auto?.overlap;
+    if (!overlap?.isBeatmatched || !overlap.bpmA || !overlap.durationMs) return null;
+    const bar = 240000 / overlap.bpmA;
+    const was = Math.max(1, Math.round(overlap.durationMs / bar));
+    // Spotify's own length is the guide. A blend of 2 bars or less means it heard a reason
+    // to cut quickly, so that stays. Otherwise a blend can halve, or double at most.
+    if (was <= 2) return null;
+    let bars = Math.max(Math.ceil(was / 2), Math.min(was * 2, grade === "rough" ? 4 : DJ_BARS[blend] ?? 8));
+    while (bars > 4 && bars * bar > longest - 500) bars /= 2;
+    if (bars === was) return null;
+    const starts = Math.round(overlap.startAMs - (bars - was) * bar);
+    if (starts < 20000) return null;
+    const custom = JSON.parse(JSON.stringify(auto));
+    Object.assign(custom.overlap, { startAMs: starts, durationMs: Math.round(bars * bar), durationBars: bars });
+    return custom;
+  };
+
+  // The set as a playlist of its own, reused each time, with Mix on and a transition written for each pair.
+  const mixPlaylist = async (songs, say) => {
+    const mixer = S.Platform.PlaylistMixingAPI;
+    const lists = await loadPlaylists();
+    let list = lists.find((entry) => entry.own && entry.name === DJ_LIST);
+    if (list) {
+      const old = (await S.Platform.PlaylistAPI.getContents(list.uri, { limit: 1000, offset: 0 })).items ?? [];
+      if (old.length) await S.Platform.PlaylistAPI.remove(list.uri, old.map((item) => ({ uri: item.uri, uid: item.uid })));
+    } else {
+      list = { uri: await S.Platform.RootlistAPI.createPlaylist(DJ_LIST, { before: "start" }), name: DJ_LIST, own: true, total: 0, songs: null };
+      if (!list.uri) throw new Error("no playlist");
+      lists.push(list);
+    }
+    list.songs = null;
+    list.total = songs.length;
+    await S.Platform.PlaylistAPI.add(list.uri, songs.map((song) => song.uri), { after: "end" });
+    let items = [];
+    await nap(600); // Give Spotify a moment before reading the playlist back.
+    for (let tries = 0; tries < 30; tries += 1) {
+      items = (await S.Platform.PlaylistAPI.getContents(list.uri, { limit: 1000, offset: 0 })).items ?? [];
+      if (items.length === songs.length) break;
+      await nap(200);
+    }
+    let written = 0;
+    const blends = [];
+    try {
+      await mixer.setMixState(list.uri, true);
+      const longest = (await mixer.getMaxTransitionLength?.()) ?? 35000;
+      say(`writing ${items.length - 1} transitions...`);
+      for (let i = 0; i + 1 < items.length; i += 1) {
+        const ids = { trackAUid: items[i].uid, trackBUid: items[i + 1].uid };
+        const auto = await mixer.getAutoTransitionForTrackPair(items[i].uri, items[i + 1].uri, ids).catch(() => null);
+        const grade = transition(songFacts(items[i].uri), songFacts(items[i + 1].uri)).grade;
+        const custom = planBlend(auto, songs[i].blend, grade, longest);
+        if (custom) {
+          await mixer.setTransitionForTrack(list.uri, items[i].uid, custom, { previousTransition: { type: "auto", transition: auto } });
+          written += 1;
+        }
+        const used = (custom ?? auto)?.overlap;
+        blends.push(used?.durationMs ? { bars: used.durationBars || Math.round(used.durationMs / (240000 / (used.bpmA || 120))), beatmatched: Boolean(used.isBeatmatched) } : null);
+      }
+    } catch {
+      say("Spotify wouldn't take custom transitions for this set, so it plays with Spotify's own");
+    }
+    return { list, items, written, blends };
+  };
+
   // The set's tempo as a row of bars, lowest to highest.
   const tempoChart = (set) => {
     const ratios = set.songs.map((song) => {
@@ -2208,6 +2474,7 @@
         ["undo", "take back the last play, add or smooth"],
         ["smooth", "reorder the next 30 songs so they run into each other"],
         ["set 60m peak", "build a set: flat, up, down or peak. Add a genre: set 60m peak house"],
+        ["dj <brief>", "plan, mix and play a DJ set with real transitions: dj 90 minutes, deep house building to techno. dj plan <brief> only shows it. dj keep <name> keeps it"],
         ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
         ["clear", "empty this window. Esc closes it"],
@@ -2440,7 +2707,7 @@
       }
       // Their tempos and keys arrive in a moment. Wait briefly so the list can show them.
       wantSongs(songs.map((song) => song.uri), true);
-      for (let tries = 0; tries < 25 && songs.some((song) => !songFacts(song.uri) && !indexMisses.has(trackId(song.uri))); tries += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      for (let tries = 0; tries < 25 && songs.some((song) => !songFacts(song.uri) && !indexMisses.has(trackId(song.uri))); tries += 1) await nap(100);
       const all = songs.length;
       if (mixToo) songs = songs.filter((song) => transition(songFacts(from.uri), songFacts(song.uri)).grade === "clean");
       print(songs.length ? `${all} new songs from Spotify's radio for ${from.name}${mixToo ? `. ${songs.length} mix cleanly with it` : ""}${songs.length > 20 ? ", first 20:" : ":"}` : `${all} new songs on Spotify's radio for ${from.name}, but none mix cleanly with it. Try radio without mix`, songs.length ? "" : "dim");
@@ -2513,7 +2780,7 @@
           // still settling from the jump, so wait, then check it took, and send it once more if not.
           const missing = () => was.queued.filter((uri) => !queuedNow().some((next) => next.uri === uri));
           for (let attempt = 0; replaced && attempt < 3 && missing().length; attempt += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 700));
+            await nap(700);
             await player.addToQueue(missing().map((uri) => ({ uri })));
             await settle(() => !missing().length);
           }
@@ -2614,6 +2881,89 @@
       printSongs(set.songs, start?.facts);
       resultsName = `Set: ${minutes} min ${shape}${tagged}, ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
       print("play all starts it. save keeps it as a playlist. Run set again for a different one", "dim");
+    },
+
+    // dj <brief>: plan a set, pick it, write its transitions and play it. dj keep <name> keeps the playlist.
+    async dj(args, line) {
+      const player = S.Platform.PlayerAPI;
+      const lists = await loadPlaylists();
+      if (args[0]?.toLowerCase() === "keep") {
+        const list = lists.find((entry) => entry.own && entry.name === DJ_LIST);
+        const name = args.slice(1).join(" ").trim();
+        if (!list || !name) {
+          print(list ? "keep it as what? Try: dj keep friday warm up" : "no DJ set to keep yet", "dim");
+          return;
+        }
+        await S.Platform.PlaylistAPI.updateDetails(list.uri, { name });
+        list.name = name;
+        print(`kept as "${name}", with its transitions. The next dj starts a fresh set`, "ok");
+        return;
+      }
+      if (!args.length) {
+        print("dj what? Describe the set: dj 90 minutes, start with deep house, build to techno", "dim");
+        return;
+      }
+      // dj plan <brief> shows the plan and the songs without playing anything.
+      const dry = args[0]?.toLowerCase() === "plan" && args.length > 1;
+      if (dry) args = args.slice(1);
+      const scoped = await readScope(args);
+      const brief = line.replace(/^\s*dj\s+(plan\s+)?/i, "").trim();
+      const { songs: pool, noun } = await songsFor(scoped.scope);
+      print("planning the set...", "dim");
+      const plan = await planSet(brief, pool);
+      const set = pickSet(plan, pool);
+      let clock = 0;
+      for (const phase of plan.phases) {
+        const span = phase.part * plan.minutes;
+        print(`  ${String(Math.round(clock)).padStart(3)} to ${String(Math.round(clock + span)).padEnd(3)} min   ${(phase.names.join(" or ") || "anything").padEnd(30)} ${Math.round(phase.from)} to ${Math.round(phase.to)} BPM   ${phase.blend} blends${phase.pool < 8 ? `   (only ${phase.pool} songs fit)` : ""}`);
+        clock += span;
+      }
+      if (set.songs.length < 4) {
+        print(`not enough ${noun.replace(/^of /, "")} fit that plan to make a set. Try broader genres, or add: in library`, "dim");
+        return;
+      }
+      if (dry) {
+        const tempos = set.songs.map((song) => Math.round(songFacts(song.uri)[0]));
+        print(`${plan.name}: ${set.songs.length} songs, ${Math.round(set.ms / 60000)} min, ${tempos[0]} to ${tempos.at(-1)} BPM, top ${Math.max(...tempos)}`);
+        printSongs(set.songs, null);
+        resultsName = plan.name;
+        print("this is only the plan. Run it without the word plan to mix and play it", "dim");
+        return;
+      }
+      const was = whereItWas(); // So undo can bring the music back.
+      let mixed;
+      try {
+        mixed = await mixPlaylist(set.songs, (text) => print(text, "dim"));
+      } catch {
+        print("couldn't make the playlist for the set", "warn");
+        return;
+      }
+      const clean = set.songs.reduce((count, song, i) => count + (i && transition(songFacts(set.songs[i - 1].uri), songFacts(song.uri)).grade === "clean" ? 1 : 0), 0);
+      const tempos = set.songs.map((song) => songFacts(song.uri)[0]);
+      const low = Math.min(...tempos);
+      const high = Math.max(...tempos, low + 6);
+      print(`${plan.name}: ${set.songs.length} songs, ${Math.round(set.ms / 60000)} min. ${clean} of ${set.songs.length - 1} transitions clean, ${mixed.written} blends rewritten`);
+      print(`tempo ${tempos.map((bpm) => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor(((bpm - low) / (high - low)) * 8))]).join("")}  ${Math.round(tempos[0])} to ${Math.round(tempos.at(-1))} BPM, top ${Math.round(Math.max(...tempos))}`, "chart");
+      printSongs(set.songs, null);
+      resultsName = plan.name;
+      // Play it: the queue would cut in ahead of the set, and shuffle would undo its order.
+      if (was.queued.length) {
+        await within(player.clearQueue());
+        await settle(() => !queuedNow().length);
+      }
+      if (was.shuffle) await within(player.setShuffle(false));
+      const first = mixed.items[0];
+      await within(player.play({ uri: mixed.list.uri }, { featureIdentifier: "playlist", referrerIdentifier: "other" }, { skipTo: { uri: first.uri, uid: first.uid }, seekTo: 0 }));
+      // A mixed playlist opens partway into its first song, at the point Spotify would blend in. A set starts at the top.
+      if (await settle(() => state().item?.uri === first.uri)) {
+        const place = () => (state().positionAsOfTimestamp ?? 0) + (state().isPaused ? 0 : Date.now() - (state().timestamp ?? Date.now()));
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await nap(1400);
+          if (place() > 8000) await within(player.seekTo(0));
+        }
+      }
+      undoPlan = { done: "the DJ set stopped and your music is back where it was", run: () => goBack(was) };
+      print(`playing it now, mixed by Spotify${was.queued.length ? `. Your ${was.queued.length === 1 ? "queued song was" : `${was.queued.length} queued songs were`} set aside` : ""}. undo puts your music back. dj keep <name> keeps this set`, "ok");
     },
 
     async save(args, line) {
@@ -2720,6 +3070,7 @@
     "like <song>   list the user's songs that sound like a song: the same genres and moods. Without a song it uses the playing one. A song is named by its title, as in like mi combi, and can be any song on Spotify. like mix, or like <song> mix, keeps only the ones that also mix cleanly with it.",
     "radio <song>   list songs from Spotify's whole catalog that are like a song and are not among the user's songs. Without a song it uses the playing one, and a named song can be any song on Spotify. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
     "set <minutes>m <shape> <genre>   list a set built from the user's songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
+    "dj <brief>   plan a DJ set from the brief, pick the songs, write beatmatched transitions between them and play it. The brief is free text: length, genres, moods, how it starts, builds and ends, and it can end with in <playlist>. Use it when the user asks you to DJ, to mix, or for a set with real transitions. Pass the user's own words as the brief.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
     "save <name>   save the last list as a playlist with that name.",
@@ -2786,6 +3137,9 @@
     'Request: find new music like Around the World by Daft Punk -> {"say": "Here are new songs like Around the World, from Spotify\'s radio. Want me to play them?", "commands": ["radio around the world daft punk"]}',
     'Request: put on some deftones -> {"say": "Playing Deftones from your songs.", "commands": ["find deftones", "play all"]}',
     'Request: build me an hour long house set that climbs -> {"say": "Here is a one hour house set that climbs. Want me to play it or save it?", "commands": ["set 60m up house"]}',
+    'Request: DJ for me for an hour, start with deep house and end on techno -> {"say": "Planning and mixing an hour that goes from deep house to techno.", "commands": ["dj an hour, start with deep house and end on techno"]}',
+    'Request: mix me a chill sunset set and play it -> {"say": "Planning and mixing a chill sunset set.", "commands": ["dj a chill sunset set"]}',
+    'Request: keep that set, call it rooftop -> {"say": "Keeping the set as rooftop.", "commands": ["dj keep rooftop"]}',
     'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
     'Request: what is the weather -> {"say": "I can only find, play, queue and save music here.", "commands": []}',
   ].join("\n");
@@ -2874,7 +3228,7 @@
   // One question to the model, answered as JSON in the given shape.
   const think = async (who, messages, shape, signal) => {
     if (!who.provider) {
-      const body = { model: who.model, stream: false, think: false, format: shape, options: { temperature: 0, num_ctx: 8192 }, messages };
+      const body = { model: who.model, stream: false, think: false, format: shape, options: { temperature: 0, num_ctx: 8192, num_predict: 700 }, messages };
       let res = await fetch(`${ollama}/api/chat`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
       if (!res.ok) {
         delete body.think; // Models that don't reason step by step reject the switch.
@@ -2923,7 +3277,7 @@
     let failure = 0;
     asking = new AbortController();
     const signal = asking.signal;
-    const timer = setTimeout(() => asking?.abort("slow"), 60000);
+    nap(60000).then(() => asking?.signal === signal && asking.abort("slow")); // Only if this same request is still waiting.
     try {
       // The genres and moods this library actually has, so the model picks real names.
       const known = commonTags(await loadLibrary().catch(() => [])).filter((tag) => tag[1] !== "o").slice(0, 160).map((tag) => tag[0]).join(", ");
@@ -2943,7 +3297,6 @@
     } catch (error) {
       failure = error?.status ?? 0;
     }
-    clearTimeout(timer);
     asking = null;
     waiting.remove();
     if (!reply) {
@@ -4299,7 +4652,7 @@
   const countListening = (s) => {
     const now = Date.now();
     const item = s.item;
-    const dt = listen.lastAt ? Math.min(2000, now - listen.lastAt) : 0;
+    const dt = listen.lastAt ? Math.min(2600, now - listen.lastAt) : 0;
     listen.lastAt = now;
     if ((item?.uri ?? null) !== listen.uri) {
       Object.assign(listen, { uri: item?.uri ?? null, ms: 0, counted: false });
@@ -4455,6 +4808,12 @@
     if (!volumeBar.matches(":active")) showVolume();
   };
 
-  tick();
-  setInterval(tick, 500);
+  // The tick also counts listening time, so it has to keep running while Spotify is
+  // in the background, where ordinary timers slow to about one a minute.
+  (async () => {
+    for (;;) {
+      tick();
+      await nap(document.hidden ? 2000 : 500);
+    }
+  })();
 })();
