@@ -1,0 +1,42 @@
+{
+  "tags": ["house", "electronic", "dance", "deep house", "tech house", "techno", "minimal techno", "melodic techno", "progressive house", "afro house", "latin house", "disco", "nu disco", "funk", "soul", "r&b", "hip hop", "rap", "trap", "pop", "indie pop", "indie rock", "rock", "classic rock", "psychedelic rock", "folk rock", "alternative", "punk", "metal", "jazz", "blues", "reggae", "dub", "trip hop", "downtempo", "ambient", "lo-fi", "drum and bass", "dubstep", "garage", "edm", "electro", "latin", "reggaeton", "country", "folk", "classical", "chill", "mellow", "melancholy", "cozy", "upbeat", "happy", "energetic", "pump up", "club", "party", "ibiza", "summer", "beach", "sexy", "romantic", "sad", "dark", "dreamy", "groovy", "smooth", "lounge", "classy", "driving", "focus", "sleep", "workout"],
+  "playing": "Stay by FISHER, 126 BPM, key 8A",
+  "cases": [
+    { "say": "play some deep house", "expect": ["^find deep house", "^play all$"] },
+    { "say": "find some techno", "expect": ["^find techno"] },
+    { "say": "queue 3 songs that mix with this", "expect": ["^mix", "^add 1 2 3$"] },
+    { "say": "what mixes with this", "expect": ["^mix$"] },
+    { "say": "play songs like this", "expect": ["^like", "^play all$"] },
+    { "say": "find songs like Mi Combi that mix well with it", "expect": ["^like mi combi.* mix"] },
+    { "say": "recommend me something new", "expect": ["^radio"] },
+    { "say": "play Around the World by Daft Punk", "expect": ["^search around the world", "^play 1$"] },
+    { "say": "play something I can party to", "expect": ["^find (party|.+ or .+)", "^play all$"] },
+    { "say": "play one of my favorite songs from 2018", "expect": ["^find 2018", "^play 1$"] },
+    { "say": "play some stoner music", "expect": ["^find .+ or .+", "^play all$"] },
+    { "say": "something for a rainy day", "expect": ["^find .+", "^play all$"] },
+    { "say": "play some polka", "expect": ["^find polka", "^play all$"] },
+    { "say": "play some house from my afroset playlist", "expect": ["^find house in afroset", "^play all$"] },
+    { "say": "build me a 45 minute house set that peaks", "expect": ["^set 45m peak house"] },
+    { "say": "be my DJ for an hour, deep house into techno", "expect": ["^dj .*deep house.*techno"] },
+    { "say": "what genre is this", "expect": ["^now$"] },
+    { "say": "what have I been listening to most", "expect": ["^top$"] },
+    { "say": "tidy up my queue", "expect": ["^smooth$"] },
+    { "say": "go back to what I was listening to", "expect": ["^undo$"] },
+    { "say": "play something released in the 80s", "expect": [] },
+    { "say": "what is the weather", "expect": [] },
+    {
+      "say": "yes, call it sunday morning",
+      "list": "20 songs (jazz): 1. So What by Miles Davis; 2. Take Five by The Dave Brubeck Quartet; ...",
+      "before": [
+        { "role": "user", "content": "Request: play some jazz" },
+        { "role": "assistant", "content": "{\"say\": \"Playing jazz from your songs. Want these saved as a playlist?\", \"commands\": [\"find jazz\", \"play all\"]}" }
+      ],
+      "expect": ["^save sunday morning$"]
+    },
+    {
+      "say": "play the third one",
+      "list": "20 songs (deep house): 1. Stay by FISHER; 2. Blue Berries by Chris Stussy; 3. Losing It by FISHER; ...",
+      "expect": ["^play 3$"]
+    }
+  ]
+}
