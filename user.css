@@ -64,7 +64,7 @@ html.tty-spotify {
   --spice-rgb-misc: 127, 127, 127;
 }
 
-html.tty-spotify :is(.tty-prompt, .tty-stats) {
+html.tty-spotify .tty-prompt {
   display: none !important;
 }
 
@@ -1388,6 +1388,62 @@ html.tty-spotify .tty-console-input {
   .tty-stats-list {
     grid-column: 1 / -1;
     padding-left: 0;
+    box-shadow: none;
+  }
+}
+
+/* Spotify's look: a rounded card under a shelf-style heading, in Spotify's own type. */
+html.tty-spotify .tty-stats {
+  border-radius: 8px;
+  padding: 16px 20px;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: none;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+html.tty-spotify .tty-stats::before {
+  content: "Your listening";
+  position: static;
+  grid-column: 1 / -1;
+  margin-bottom: 12px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-base, #fff);
+  font-family: var(--encore-title-font-stack, inherit);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 700;
+}
+
+html.tty-spotify .tty-stats-label {
+  color: var(--text-subdued, #b3b3b3);
+  font-size: 12px;
+  text-transform: none;
+}
+
+html.tty-spotify .tty-stats-label::first-letter {
+  text-transform: uppercase;
+}
+
+html.tty-spotify .tty-stats-value {
+  color: var(--text-base, #fff);
+  font-family: var(--encore-title-font-stack, inherit);
+  font-size: 28px;
+  line-height: 34px;
+}
+
+html.tty-spotify .tty-stats-list {
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.1);
+}
+
+html.tty-spotify .tty-stats-count {
+  color: var(--text-subdued, #b3b3b3);
+}
+
+@media (max-width: 1400px) {
+  html.tty-spotify .tty-stats-list {
     box-shadow: none;
   }
 }
