@@ -3593,7 +3593,20 @@
       if (dry) args = args.slice(1);
       const scoped = await readScope(args);
       const brief = line.replace(/^\s*dj\s+(plan\s+)?/i, "").trim();
-      const { songs: pool, noun } = await songsFor(scoped.scope);
+      let { songs: pool, noun } = await songsFor(scoped.scope);
+      // An era in the brief (80s, 80s and 90s, 1985-1999) keeps the set to songs released then.
+      const decades = [...brief.matchAll(/\b(19|20)?([0-9])0'?s\b/gi)].map((m) => Number(m[1] ? `${m[1]}${m[2]}0` : `${Number(m[2]) >= 3 ? 19 : 20}${m[2]}0`));
+      const spans = [...decades.map((start) => [start, start + 9]), ...[...brief.matchAll(/\b((?:19|20)\d\d)\s*(?:-|to)\s*((?:19|20)\d\d)\b/gi)].map((m) => [Number(m[1]), Number(m[2])].sort((a, b) => a - b))];
+      if (spans.length) {
+        const from = Math.min(...spans.map((span) => span[0]));
+        const to = Math.max(...spans.map((span) => span[1]));
+        const then = pool.filter((song) => releasedIn(song.uri) >= from && releasedIn(song.uri) <= to);
+        if (then.length >= 30) {
+          pool = then;
+          noun = `of your songs released ${from} to ${to}`;
+          print(`keeping to the ${then.length} songs released ${from} to ${to}`, "dim");
+        } else print(`only ${then.length} of your songs came out ${from} to ${to}, so the set isn't limited to them`, "dim");
+      }
       print("planning the set...", "dim");
       const plan = await planSet(brief, pool);
       const set = pickSet(plan, pool);

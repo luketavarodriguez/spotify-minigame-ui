@@ -67,7 +67,7 @@ The console is a real pane, not a pop-up. Drag its title to dock it under or bes
 
 `dj 90 minutes, start with deep house, build to techno` and it does what a DJ does. It plans the set in phases (genres, tempo, how long the blends should be), picks songs from your library that fit each phase and mix into each other, and writes a transition for every pair: where to leave one song, where to bring in the next, and for how many bars. Then it presses play, and Spotify's own mixing engine performs it, beatmatched.
 
-`dj plan …` shows you the plan without playing anything. `dj keep friday` keeps the set as its own playlist, transitions included. `undo` puts your music back.
+Name an era (`dj an hour of 80s and 90s house`) and it only picks songs released then. `dj plan …` shows you the plan without playing anything. `dj keep friday` keeps the set as its own playlist, transitions included. `undo` puts your music back.
 
 You can also plan a set somewhere else. `export` saves your songs with their tempo, key, tags and release year as one file. Hand that to any AI (or plan it yourself, if you're that kind of person), have it write a set file in the format in [dev/SET-FORMAT.md](dev/SET-FORMAT.md), and paste it after `dj load`. It mixes and plays the set with the cue points and blend lengths the file asks for, snapped to Spotify's beat grid. The set can use any song on Spotify, not only yours. `dj check` shows it first without playing anything. `dj audition` plays only the transitions, about 40 seconds each, so you can check an hour of mixing in a few minutes.
 
