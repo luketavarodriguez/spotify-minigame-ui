@@ -7,7 +7,7 @@
 //   await __tty.look("terminal")         switch look or view with the theme's own switches
 //   __tty.open() / __tty.close()         show or hide the console pane (for screenshots)
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   if (window.__tty?.version === VERSION) return true;
 
   // Chrome slows a hidden window's timers to about one a minute. A worker's timers keep time.
@@ -53,14 +53,15 @@
   // Works with the pane hidden. Song rows are counted, not returned, unless songs is set.
   const run = async (text, { max = 100000, keep = 8, songs = 0 } = {}) => {
     if (!input()) return { error: "the theme's console isn't on the page" };
-    const before = output().childElementCount;
+    // The console keeps its last 300 rows, so counting rows fails once it's full. Mark what's there instead.
+    for (const row of output().children) row.dataset.ttySeen = "1";
     const started = performance.now();
     input().value = text;
     input().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await wait(350);
     while (box().classList.contains("is-busy") && performance.now() - started < max) await wait(100);
     await wait(400);
-    const rows = [...output().children].slice(before);
+    const rows = [...output().children].filter((row) => !row.dataset.ttySeen);
     const isSong = (row) => row.classList.contains("tty-console-song");
     const text1 = (row) => row.innerText.replace(/\s*\n\s*/g, " | ").slice(0, 200);
     return {
