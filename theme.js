@@ -2512,7 +2512,8 @@
   };
 
   // The set as a playlist of its own, reused each time, with Mix on and a transition written for each pair.
-  const mixPlaylist = async (songs, say) => {
+  // choose(i, auto, items, longest), when given, decides each pair's transition instead of planBlend.
+  const mixPlaylist = async (songs, say, choose) => {
     const mixer = S.Platform.PlaylistMixingAPI;
     const lists = await loadPlaylists();
     let list = lists.find((entry) => entry.own && entry.name === DJ_LIST);
@@ -2544,7 +2545,7 @@
         const ids = { trackAUid: items[i].uid, trackBUid: items[i + 1].uid };
         const auto = await mixer.getAutoTransitionForTrackPair(items[i].uri, items[i + 1].uri, ids).catch(() => null);
         const grade = transition(songFacts(items[i].uri), songFacts(items[i + 1].uri)).grade;
-        const custom = planBlend(auto, songs[i].blend, grade, longest);
+        const custom = choose ? await choose(i, auto, items, longest) : planBlend(auto, songs[i].blend, grade, longest);
         if (custom) {
           await mixer.setTransitionForTrack(list.uri, items[i].uid, custom, { previousTransition: { type: "auto", transition: auto } });
           written += 1;
@@ -2568,6 +2569,463 @@
     const high = Math.max(1.12, ...ratios);
     return ratios.map((ratio) => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor(((ratio - low) / (high - low)) * 8))]).join("");
   };
+
+  // ---- Set files: a set planned somewhere else, played here ----
+  //
+  // An agent reads the exported library, plans a set and writes it as a file:
+  // songs in order and, for each pair, what it wants (intent: where A should be
+  // gone, where B should be by then, how many bars) and, if it had Spotify's
+  // numbers, the exact transition (resolved). dj load puts the songs in the working
+  // set playlist and writes each transition on a copy of Spotify's own for that
+  // pair, then reads each one back. dj check reads the file and lists it.
+  // Each pair carries an arm (custom, auto, or today's dj rule) and is logged, so
+  // the listening log can tell which kind of transition a skip came after.
+
+  // A file for the user to keep. A plain download link isn't known to work in
+  // Spotify's page (UNSURE), but a save dialog does: Spicetify Marketplace saves
+  // its backups this way. With no dialog, the clipboard is the fallback.
+  // Call it from a click, since a save dialog needs one.
+  const saveText = async (text, name) => {
+    try {
+      const file = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "JSON", accept: { "application/json": [".json"] } }] });
+      const out = await file.createWritable();
+      await out.write(text);
+      await out.close();
+      print(`saved ${file.name}`, "ok");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return; // The dialog was closed.
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      print("couldn't open a save dialog, so it's on the clipboard. Paste it into a file", "ok");
+    } catch {
+      print("couldn't save it or copy it", "warn");
+    }
+  };
+
+  // The library as one JSON file for an agent: a header, then one song per line, so it
+  // can be read with grep or a few lines at a time.
+  const libraryFile = async (scope) => {
+    if (!scope) await readOwn().catch(() => {}); // Every owned playlist, not the first few seconds' worth.
+    const { songs, noun } = await songsFor(scope);
+    for (let tries = 0; tries < 50 && !releaseYears.size; tries += 1) await nap(100); // Release years arrive in the background.
+    const lists = (await loadPlaylists().catch(() => [])).filter((list) => list.songs?.length && (scope?.list ? list === scope.list : scope?.all || list.own));
+    const inLists = new Map();
+    lists.forEach((list, n) => {
+      for (const song of list.songs) inLists.set(song.uri, [...new Set([...(inLists.get(song.uri) ?? []), n])]);
+    });
+    const kinds = {};
+    const counts = { songs: songs.length, tempo: 0, tags: 0, released: 0, features: 0 };
+    const rows = songs.map((song) => {
+      const row = { uri: song.uri, name: song.name, artists: song.artists };
+      if (song.ms) row.seconds = Math.round(song.ms / 100) / 10;
+      const facts = songFacts(song.uri);
+      if (facts?.[0]) row.bpm = facts[0];
+      if (facts?.[1]) row.key = facts[1];
+      if (facts?.[0]) counts.tempo += 1;
+      const tags = tagsOf(song.uri);
+      if (tags.length) {
+        row.tags = Object.fromEntries(tags.map((tag) => [tag.name, Math.round(tag.weight * 100)]));
+        for (const tag of tags) kinds[tag.name] = { g: "genre", m: "mood" }[tag.kind] ?? "other";
+        counts.tags += 1;
+      }
+      if (releasedIn(song.uri)) {
+        row.released = releasedIn(song.uri);
+        counts.released += 1;
+      }
+      if (song.year) row.added = song.year;
+      if (inLists.has(song.uri)) row.lists = inLists.get(song.uri);
+      const features = songFeatures(song.uri);
+      if (features) {
+        row.features = features;
+        counts.features += 1;
+      }
+      return row;
+    });
+    const head = {
+      format: "spotify-mod-library",
+      version: 1,
+      exportId: `library-${Date.now().toString(36)}`, // A set file copies this, so a set can be traced to the library it was planned from.
+      exported: new Date().toISOString(),
+      about: "One song per line. seconds: length. bpm and key (Camelot) are Spotify's. tags: Spotify's genre and mood tags, weight 0 to 100, kinds in tagKinds. released: release year. added: the year it was liked or added to a playlist. lists: numbers in playlists. features: phrases, intro, outro, energy and drops in seconds, where analysed. A set file for dj load is format spotify-mod-set, version 1, and may use any song on Spotify, not only these.",
+      counts,
+      tagKinds: kinds,
+      playlists: lists.map((list) => ({ name: list.name, uri: list.uri, songs: list.songs.length })),
+    };
+    const text = `${JSON.stringify(head).slice(0, -1)},"songs":[\n${rows.map((row) => JSON.stringify(row)).join(",\n")}\n]}\n`;
+    return { text, counts, noun };
+  };
+
+  const songFeatures = () => null; // Phrases and energy per song, once the theme has them.
+
+  // checkSet: begin
+  // What's wrong with a set file, in plain words. Problems stop a load; warnings don't
+  // (a pair with a warning usually falls back to Spotify's own). `about(uri)` may give
+  // { seconds, bpm } for a song, which turns on the timing checks.
+  const SET_TYPES = ["blend", "drop-entry", "fade", "cut"];
+  const SET_ARMS = ["custom", "auto", "today"];
+  const SET_KINDS = ["phrase", "intro", "outro", "drop", "breakdown", "time"];
+  const SET_GAP = 60; // Seconds a song plays after its blend in has finished, before it can start blending out.
+  const checkSet = (data, about = () => null) => {
+    const problems = [];
+    const warnings = [];
+    if (typeof data === "string") {
+      try {
+        data = JSON.parse(data);
+      } catch (error) {
+        return { set: null, problems: [`it isn't JSON (${String(error.message).slice(0, 80)})`], warnings };
+      }
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) return { set: null, problems: ["a set file is one JSON object"], warnings };
+    const text = (value) => typeof value === "string" && value.trim() !== "";
+    const number = (value) => typeof value === "number" && Number.isFinite(value);
+    const fields = (object, allowed, where) => {
+      const unknown = Object.keys(object).filter((key) => !allowed.includes(key));
+      if (unknown.length) problems.push(`${where}: unknown field ${unknown.map((key) => `"${key}"`).join(", ")}. Fields are ${allowed.join(", ")}`);
+    };
+    if (data.format !== "spotify-mod-set") problems.push('format must be "spotify-mod-set"');
+    if (data.version !== 1) problems.push(`version must be 1 (this file says ${JSON.stringify(data.version)})`);
+    if (!text(data.name)) problems.push("name is missing");
+    if (!text(data.setId)) problems.push("setId is missing. Any unique text works, such as the date and the persona: 2026-11-19-marlowe-1");
+    for (const field of ["brief", "gig", "dj", "notes", "created", "exportId", "featuresVersion"]) if (data[field] !== undefined && typeof data[field] !== "string") problems.push(`${field} must be text`);
+    if (text(data.created) && Number.isNaN(Date.parse(data.created))) warnings.push(`created isn't a date: ${data.created}`);
+    const songs = Array.isArray(data.songs) ? data.songs : [];
+    if (!Array.isArray(data.songs)) problems.push("songs must be a list");
+    else if (songs.length < 2) problems.push("songs needs at least two songs");
+    else if (songs.length > 300) problems.push(`a set holds 300 songs at most (this one has ${songs.length})`);
+    const seen = new Map();
+    songs.forEach((song, i) => {
+      const where = `song ${i + 1}`;
+      if (!song || typeof song !== "object" || Array.isArray(song)) {
+        problems.push(`${where} isn't an object`);
+        return;
+      }
+      if (!/^spotify:track:[A-Za-z0-9]{22}$/.test(song.uri ?? "")) problems.push(`${where}: uri must be spotify:track: followed by the 22 letters and digits of the track id (got ${JSON.stringify(song.uri ?? null).slice(0, 60)})`);
+      if (!text(song.name)) problems.push(`${where}: name is missing`);
+      if (song.artists !== undefined && typeof song.artists !== "string") problems.push(`${where}: artists must be text, names joined with ", "`);
+      if (song.reason !== undefined && typeof song.reason !== "string") problems.push(`${where}: reason must be text`);
+      if (song.alternates !== undefined && !Array.isArray(song.alternates)) problems.push(`${where}: alternates must be a list of songs`);
+      for (const field of ["seconds", "bpm"]) if (song[field] !== undefined && !(number(song[field]) && song[field] > 0)) problems.push(`${where}: ${field} must be a positive number`);
+      if (seen.has(song.uri)) warnings.push(`${where} is the same song as song ${seen.get(song.uri) + 1}`);
+      else seen.set(song.uri, i);
+    });
+    const steps = data.transitions ?? [];
+    if (!Array.isArray(steps)) problems.push("transitions must be a list");
+    else if (songs.length > 1 && steps.length > songs.length - 1) problems.push(`there are ${steps.length} transitions for ${songs.length - 1} pairs of songs. transitions[0] joins song 1 to song 2`);
+    else if (songs.length > 1 && steps.length < songs.length - 1) warnings.push(`the last ${songs.length - 1 - steps.length} pairs have no transition, so Spotify mixes them its own way`);
+    let landed = 0; // Where the current song is, in seconds, when the blend into it has finished.
+    (Array.isArray(steps) ? steps : []).forEach((step, i) => {
+      const where = `transition ${i + 1} (song ${i + 1} into ${i + 2})`;
+      const a = songs[i];
+      const b = songs[i + 1];
+      const arrived = landed;
+      landed = 0;
+      if (step === null) return;
+      if (typeof step !== "object" || Array.isArray(step)) {
+        problems.push(`${where} must be an object, or null for Spotify's own`);
+        return;
+      }
+      fields(step, ["from", "to", "arm", "intent", "resolved", "note"], where);
+      if (step.from !== undefined && step.from !== a?.uri) problems.push(`${where}: from is ${step.from}, but song ${i + 1} is ${a?.uri}. Is a song missing or out of order?`);
+      if (step.to !== undefined && step.to !== b?.uri) problems.push(`${where}: to is ${step.to}, but song ${i + 2} is ${b?.uri}. Is a song missing or out of order?`);
+      if (step.note !== undefined && typeof step.note !== "string") problems.push(`${where}: note must be text`);
+      const arm = step.arm ?? "custom";
+      if (!SET_ARMS.includes(arm)) problems.push(`${where}: arm must be ${SET_ARMS.join(", ")}`);
+      const intent = step.intent;
+      const resolved = step.resolved;
+      if (arm === "custom" && !intent && !resolved) problems.push(`${where}: a custom transition needs intent, resolved, or both`);
+      if (intent !== undefined) {
+        if (!intent || typeof intent !== "object") problems.push(`${where}: intent must be an object`);
+        else {
+          fields(intent, ["type", "bars", "leaveA", "landB", "tolerance"], `${where} intent`);
+          if (!SET_TYPES.includes(intent.type)) problems.push(`${where}: intent.type must be ${SET_TYPES.join(", ")} (got ${JSON.stringify(intent.type ?? null)})`);
+          if (intent.type !== "cut" && !(Number.isInteger(intent.bars) && intent.bars >= 1 && intent.bars <= 64)) problems.push(`${where}: intent.bars must be a whole number from 1 to 64`);
+          if (intent.tolerance !== undefined && !(number(intent.tolerance) && intent.tolerance >= 0)) problems.push(`${where}: intent.tolerance must be bars, 0 or more`);
+          for (const [name, song] of [["leaveA", i + 1], ["landB", i + 2]]) {
+            const point = intent[name];
+            if (!point || typeof point !== "object" || !(number(point.at) && point.at >= 0)) problems.push(`${where}: intent.${name}.at must be the seconds into song ${song}, 0 or more`);
+            else {
+              fields(point, ["kind", "at"], `${where} intent.${name}`);
+              if (point.kind !== undefined && !SET_KINDS.includes(point.kind)) problems.push(`${where}: intent.${name}.kind must be ${SET_KINDS.join(", ")}`);
+            }
+          }
+        }
+      }
+      if (resolved !== undefined) {
+        if (!resolved || typeof resolved !== "object") problems.push(`${where}: resolved must be an object`);
+        else {
+          fields(resolved, ["startAMs", "startBMs", "durationMs", "durationBars", "presetId", "source"], `${where} resolved`);
+          for (const field of ["startAMs", "startBMs", "durationMs"]) if (!(number(resolved[field]) && resolved[field] >= 0)) problems.push(`${where}: resolved.${field} must be milliseconds, 0 or more`);
+          if (resolved.durationBars !== undefined && !(Number.isInteger(resolved.durationBars) && resolved.durationBars >= 0)) problems.push(`${where}: resolved.durationBars must be a whole number`);
+          if (resolved.presetId !== undefined && !(Number.isInteger(resolved.presetId) && resolved.presetId >= 1 && resolved.presetId <= 22)) problems.push(`${where}: resolved.presetId must be a preset from 1 to 22`);
+          if (resolved.source !== undefined && !["candidate", "shifted", "auto"].includes(resolved.source)) problems.push(`${where}: resolved.source must be candidate, shifted or auto`);
+          if (number(resolved.durationMs) && resolved.durationMs > 35000) warnings.push(`${where}: resolved.durationMs is over Spotify's longest blend (35000). The intent will be used, or Spotify's own`);
+        }
+      }
+      if (arm !== "custom") return;
+      // Timing, when the songs' lengths and tempos are known. Approximate: Spotify may run
+      // song B a few percent faster or slower during a beatmatched blend.
+      const facts = [about(a?.uri) ?? {}, about(b?.uri) ?? {}];
+      const lengthA = a?.seconds ?? facts[0].seconds;
+      const lengthB = b?.seconds ?? facts[1].seconds;
+      const bpm = a?.bpm ?? facts[0].bpm;
+      let span = null; // [starts in A, ends in A, starts in B, ends in B], seconds
+      if (resolved && number(resolved.startAMs) && number(resolved.startBMs) && number(resolved.durationMs)) span = [resolved.startAMs / 1000, (resolved.startAMs + resolved.durationMs) / 1000, resolved.startBMs / 1000, (resolved.startBMs + resolved.durationMs) / 1000];
+      else if (intent && bpm && number(intent.leaveA?.at) && number(intent.landB?.at)) {
+        const bar = 240 / bpm;
+        const cut = intent.type === "cut";
+        const length = cut ? bar : Math.min(intent.bars ?? 0, Math.floor(34.5 / bar)) * bar;
+        if (!cut && (intent.bars ?? 0) * bar > 35) warnings.push(`${where}: ${intent.bars} bars at ${Math.round(bpm)} BPM is ${Math.round(intent.bars * bar)} s, longer than Spotify's longest blend (35 s). It will be shortened to ${Math.floor(34.5 / bar)} bars, keeping where it ends`);
+        const endA = intent.leaveA.at + (cut ? bar / 2 : 0);
+        const endB = intent.landB.at + (cut ? bar / 2 : 0);
+        span = [endA - length, endA, endB - length, endB];
+      }
+      if (!span) return;
+      if (span[0] < 0 || span[2] < 0) warnings.push(`${where}: the transition would start before the beginning of a song. Spotify's own will play`);
+      if (lengthA && span[1] > lengthA) warnings.push(`${where}: song ${i + 1} is ${Math.round(lengthA)} s long, but the transition runs to ${Math.round(span[1])} s. Spotify's own will play`);
+      if (lengthB && span[3] > lengthB - 10) warnings.push(`${where}: song ${i + 2} would be at ${Math.round(span[3])} s when the transition ends, too near its end (${Math.round(lengthB)} s). Spotify's own will play`);
+      if (span[0] < arrived + SET_GAP) warnings.push(`${where}: starts leaving song ${i + 1} at ${Math.round(span[0])} s, less than ${SET_GAP} s after the blend into it finished (about ${Math.round(arrived)} s). Spotify's own will play`);
+      landed = span[3];
+    });
+    return { set: problems.length ? null : data, problems, warnings };
+  };
+  // checkSet: end
+
+  // Spotify's preset ids (dev/NOTES.md, "Transition presets"): 11 to 15 are hard cuts at the
+  // middle of the overlap. 7 is a smooth blend with the bass swapped halfway (my pick for a
+  // blend when Spotify's own was a cut). Types: 1 fade, 2 cut, 3 and 4 the same, beatmatched.
+  const SET_CUT = 11;
+  const SET_BLEND = 7;
+  const presetType = (id, beatmatched) => (id >= 11 && id <= 15 ? 2 : 1) + (beatmatched ? 2 : 0);
+
+  // A transition for the pair, always on a copy of Spotify's own (`auto`), so the fields
+  // Spotify checks when it reads a transition back (the songs, their playable versions,
+  // their speeds) stay as Spotify set them. Only the points, the length and the preset change.
+  // aMs and bMs are the songs' lengths, landed is where the blend into song A finished,
+  // longest is Spotify's longest blend. Returns { custom, source, why }; custom is null
+  // when Spotify's own should play.
+  const resolveStep = (step, auto, aMs, bMs, landed, longest) => {
+    const overlap = auto?.overlap;
+    if (!overlap?.bpmA) return { custom: null, source: "auto", why: "Spotify has no transition for this pair" };
+    const beatmatched = Boolean(overlap.isBeatmatched);
+    const speed = beatmatched ? overlap.speedB || 1 : 1; // How fast song B runs during the blend.
+    const fits = (startA, startB, length) => startA >= 0 && startB >= 0 && length > 0 && length <= longest && (!aMs || startA + length <= aMs) && (!bMs || startB + length * speed <= bMs - 10000);
+    const make = (startA, startB, length, bars, preset, source) => {
+      const custom = JSON.parse(JSON.stringify(auto));
+      Object.assign(custom.overlap, { startAMs: Math.round(startA), startBMs: Math.round(startB), durationMs: Math.round(length), durationBars: beatmatched ? bars : 0 });
+      custom.preset = { ...custom.preset, id: preset, type: presetType(preset, beatmatched) };
+      return { custom, source, why: "" };
+    };
+    let why = "";
+    // The exact transition, when the file has one and it still fits.
+    const done = step.resolved;
+    if (done) {
+      const bars = done.durationBars ?? Math.round(done.durationMs / (240000 / overlap.bpmA));
+      if (!fits(done.startAMs, done.startBMs, done.durationMs)) why = "its exact points don't fit the songs";
+      else if (done.startAMs < landed + SET_GAP * 1000) why = "it leaves too soon after the blend into that song";
+      else return make(done.startAMs, done.startBMs, done.durationMs, bars, done.presetId ?? auto.preset?.id ?? 1, done.source ?? "shifted");
+    }
+    const want = step.intent;
+    if (!want) return { custom: null, source: "auto", why };
+    const cut = want.type === "cut";
+    if (!beatmatched && !cut && want.type !== "fade") return { custom: null, source: "auto", why: "Spotify doesn't beatmatch this pair, so only a cut or a fade can be written" };
+    const bar = 240000 / overlap.bpmA;
+    const barB = 240000 / (overlap.bpmB || overlap.bpmA);
+    let bars = cut ? 1 : want.bars;
+    const fit = Math.floor((longest - 500) / bar);
+    if (fit < 1) return { custom: null, source: "auto", why: "a bar at this tempo is longer than Spotify's longest blend" };
+    let shortened = false;
+    if (bars > fit) {
+      bars = fit; // The end stays where the file put it, so the phrase still lands; the start moves later.
+      shortened = true;
+    }
+    const length = bars * bar;
+    // The file names where each song is when the change is complete. A cut swaps at the middle of its overlap.
+    const endA = want.leaveA.at * 1000 + (cut ? bar / 2 : 0);
+    const endB = want.landB.at * 1000 + (cut ? (bar / 2) * speed : 0);
+    let startA = endA - length;
+    let startB = endB - length * speed;
+    let source = "shifted";
+    if (beatmatched) {
+      // Spotify's own points sit on its beat grid. Move to the nearest grid point, by whole bars of each song.
+      const stepsA = Math.round((startA - overlap.startAMs) / bar);
+      const stepsB = Math.round((startB - overlap.startBMs) / barB);
+      const snappedA = overlap.startAMs + stepsA * bar;
+      const snappedB = overlap.startBMs + stepsB * barB;
+      const room = (want.tolerance ?? 0.5) + 1e-9;
+      if (Math.abs(snappedA - startA) > room * bar || Math.abs(snappedB - startB) > room * barB) return { custom: null, source: "auto", why: "it is further off Spotify's beat grid than its tolerance" };
+      startA = snappedA;
+      startB = snappedB;
+      if (!stepsA && !stepsB) source = "candidate";
+    }
+    if (!fits(startA, startB, length)) return { custom: null, source: "auto", why: "its points fall outside the songs" };
+    if (startA < landed + SET_GAP * 1000) return { custom: null, source: "auto", why: "it leaves too soon after the blend into that song" };
+    const kept = auto.preset?.id;
+    const preset = cut ? SET_CUT : kept && presetType(kept, false) === 1 ? kept : want.type === "fade" ? 1 : SET_BLEND;
+    const made = make(startA, startB, length, bars, preset, source);
+    made.why = shortened ? "shortened" : "";
+    return made;
+  };
+
+  // What mixPlaylist calls for each pair while writing a loaded set. Notes every pair in report.pairs.
+  const setWriter = (songs, report) => {
+    let place = null; // For each playlist row, which song of the set it is.
+    let landed = 0;
+    return async (i, auto, items, longest) => {
+      if (!place) {
+        // Normally row i is song i. If Spotify left a song out, match the rest by uri.
+        place = items.map((_, row) => row);
+        if (items.length !== songs.length) {
+          let at = 0;
+          place = items.map((item) => {
+            while (at < songs.length && songs[at].uri !== item.uri) at += 1;
+            return at++;
+          });
+        }
+      }
+      const step = place[i + 1] === place[i] + 1 ? songs[place[i]]?.step : null;
+      const arm = step ? step.arm ?? "custom" : "auto";
+      const before = landed;
+      const own = auto?.overlap;
+      landed = own ? own.startBMs + own.durationMs * (own.isBeatmatched ? own.speedB || 1 : 1) : 0;
+      const pair = { pairIndex: place[i], arm, row: i, source: "auto", why: "", want: null };
+      report.pairs.push(pair);
+      let custom = null;
+      if (arm === "today") {
+        // Today's dj rule, for comparison: Spotify's suggestion with the length changed.
+        const blend = { 16: "long", 8: "medium", 4: "quick" }[step.intent?.bars] ?? "medium";
+        custom = planBlend(auto, blend, transition(songFacts(items[i].uri), songFacts(items[i + 1].uri)).grade, longest);
+        if (custom) pair.source = "today";
+      } else if (arm === "custom") {
+        const made = resolveStep(step, auto, items[i].duration?.milliseconds ?? 0, items[i + 1].duration?.milliseconds ?? 0, before, longest);
+        custom = made.custom;
+        pair.source = made.source;
+        pair.why = made.why;
+      }
+      if (custom) {
+        pair.want = custom.overlap ? { startAMs: custom.overlap.startAMs, startBMs: custom.overlap.startBMs, durationMs: custom.overlap.durationMs, durationBars: custom.overlap.durationBars, presetId: custom.preset?.id } : null;
+        const used = custom.overlap;
+        landed = used.startBMs + used.durationMs * (used.isBeatmatched ? used.speedB || 1 : 1);
+      }
+      return custom;
+    };
+  };
+
+  // Read each written transition back from Spotify and compare. Every pair gets a status:
+  // written, kept auto (nothing was written, Spotify's own plays), or failed (written but not stored as sent).
+  const checkWrites = async (mixed, report) => {
+    const mixer = S.Platform.PlaylistMixingAPI;
+    for (const pair of report.pairs) {
+      const a = mixed.items[pair.row];
+      const b = mixed.items[pair.row + 1];
+      if (!pair.want) {
+        pair.status = "kept auto";
+        const own = await mixer.getAutoTransitionForTrackPair(a.uri, b.uri, { trackAUid: a.uid, trackBUid: b.uid }).catch(() => null);
+        pair.resolved = own?.overlap ? { startAMs: own.overlap.startAMs, startBMs: own.overlap.startBMs, durationMs: own.overlap.durationMs, durationBars: own.overlap.durationBars, presetId: own.preset?.id } : null;
+        continue;
+      }
+      const stored = await mixer.getCustomTransitionForTrackPair(mixed.list.uri, a.uri, b.uri, { trackAUid: a.uid, trackBUid: b.uid }).catch(() => null);
+      const got = stored?.overlap;
+      const same = got && ["startAMs", "startBMs", "durationMs"].every((field) => Math.abs((got[field] ?? -1) - pair.want[field]) <= 1) && stored.preset?.id === pair.want.presetId;
+      pair.status = same ? "written" : "failed";
+      pair.resolved = pair.want;
+    }
+  };
+
+  // Play the working set from its first second. The queue would cut in ahead of it,
+  // and shuffle would undo its order, so both are set aside. undo brings it all back.
+  const playWorkingSet = async (mixed, was) => {
+    const player = S.Platform.PlayerAPI;
+    if (was.queued.length) {
+      await within(player.clearQueue());
+      await settle(() => !queuedNow().length);
+    }
+    if (was.shuffle) await within(player.setShuffle(false));
+    const first = mixed.items[0];
+    await within(player.play({ uri: mixed.list.uri }, { featureIdentifier: "playlist", referrerIdentifier: "other" }, { skipTo: { uri: first.uri, uid: first.uid }, seekTo: 0 }));
+    // A mixed playlist opens partway into its first song, at the point Spotify would blend in. A set starts at the top.
+    if (await settle(() => state().item?.uri === first.uri)) {
+      const place = () => (state().positionAsOfTimestamp ?? 0) + (state().isPaused ? 0 : Date.now() - (state().timestamp ?? Date.now()));
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await nap(1400);
+        if (place() > 8000) await within(player.seekTo(0));
+      }
+    }
+    undoPlan = { done: "the DJ set stopped and your music is back where it was", run: () => goBack(was) };
+  };
+
+  // Read, check, mix and play a set file. dry only checks it and lists it.
+  const loadSet = async (text, dry) => {
+    const { set, problems, warnings } = checkSet(text, (uri) => {
+      const facts = songFacts(uri);
+      return facts?.[0] ? { bpm: facts[0] } : null;
+    });
+    if (!set) {
+      print(`that set file can't be played. ${problems.length === 1 ? "One thing to fix" : `${problems.length} things to fix`}:`, "warn");
+      for (const problem of problems.slice(0, 8)) print(`  ${problem}`, "dim");
+      if (problems.length > 8) print(`  and ${problems.length - 8} more. dev/validate-set.mjs lists them all`, "dim");
+      return;
+    }
+    const songs = set.songs.map((song, i) => ({ uri: song.uri, name: song.name, artists: song.artists ?? "", ms: (song.seconds ?? 0) * 1000, step: set.transitions?.[i] ?? null }));
+    await learnSongs(songs); // Tempos and keys for songs outside the library, for the grades in the list.
+    const custom = songs.filter((song) => song.step && (song.step.arm ?? "custom") === "custom").length;
+    print(`${set.name}${set.dj ? `, by ${set.dj}` : ""}${set.gig ? `, for ${set.gig}` : ""}: ${songs.length} songs, ${custom} transitions of its own`);
+    if (set.brief) print(set.brief, "dim");
+    if (set.notes) print(set.notes, "dim");
+    for (const warning of warnings.slice(0, 6)) print(warning, "dim");
+    if (warnings.length > 6) print(`and ${warnings.length - 6} more warnings. dev/validate-set.mjs lists them all`, "dim");
+    if (dry) {
+      printSongs(songs, null);
+      resultsName = set.name;
+      print("this only checks the set. dj load plays it", "dim");
+      return;
+    }
+    const was = whereItWas(); // So undo can bring the music back.
+    const report = { pairs: [] };
+    let mixed;
+    try {
+      mixed = await mixPlaylist(songs, (line) => print(line, "dim"), setWriter(songs, report));
+    } catch {
+      print("couldn't make the playlist for the set", "warn");
+      return;
+    }
+    if (!mixed.items.length) {
+      print("Spotify took none of the set's songs", "warn");
+      return;
+    }
+    await checkWrites(mixed, report);
+    const loadedAt = Date.now();
+    for (const pair of report.pairs) addSetLog({ setId: set.setId, name: set.name, pairIndex: pair.pairIndex, arm: pair.arm, status: pair.status, source: pair.source, why: pair.why, resolved: pair.resolved, from: mixed.items[pair.row].uri, to: mixed.items[pair.row + 1].uri, list: mixed.list.uri, loadedAt });
+    // A song id an agent made up still plays something. Say so when Spotify's name for a song isn't the set's.
+    const plain = (name) => String(name ?? "").toLowerCase().replace(/\(.*?\)|\[.*?\]| - .*$/g, "").replace(/[^a-z0-9]+/g, "");
+    const missing = songs.filter((song) => !mixed.items.some((item) => item.uri === song.uri));
+    if (missing.length) print(`${missing.length} of the set's songs didn't make it into the playlist: ${missing.slice(0, 4).map((song) => song.name).join(", ")}${missing.length > 4 ? "..." : ""}`, "warn");
+    const odd = mixed.items.map((item) => [item, songs.find((song) => song.uri === item.uri)]).filter(([item, song]) => song && plain(item.name) && plain(song.name) && !plain(item.name).includes(plain(song.name)) && !plain(song.name).includes(plain(item.name)));
+    for (const [item, song] of odd.slice(0, 4)) print(`the set calls ${item.uri.split(":").pop()} "${song.name}", but on Spotify it's "${item.name}". The file may have the wrong id`, "warn");
+    const count = (status) => report.pairs.filter((pair) => pair.status === status).length;
+    const shortened = report.pairs.filter((pair) => pair.why === "shortened").length;
+    print(`${count("written")} transitions written and read back, ${count("kept auto")} left to Spotify${count("failed") ? `, ${count("failed")} didn't stick` : ""}${shortened ? `. ${shortened} shortened to fit Spotify's longest blend` : ""}`, count("failed") ? "warn" : "ok");
+    const reasons = new Map();
+    for (const pair of report.pairs) if (pair.arm === "custom" && pair.status === "kept auto" && pair.why) reasons.set(pair.why, [...(reasons.get(pair.why) ?? []), pair.pairIndex + 1]);
+    for (const [why, pairs] of reasons) print(`Spotify's own mix plays after song${pairs.length > 1 ? "s" : ""} ${pairs.join(", ")}: ${why}`, "dim");
+    printSongs(mixed.items.map((item) => songs.find((song) => song.uri === item.uri) ?? { uri: item.uri, name: item.name ?? "", artists: "" }), null);
+    resultsName = set.name;
+    await playWorkingSet(mixed, was);
+    print(`playing it now, mixed by Spotify${was.queued.length ? `. Your ${was.queued.length === 1 ? "queued song was" : `${was.queued.length} queued songs were`} set aside` : ""}. undo puts your music back. dj keep <name> keeps this set`, "ok");
+  };
+
+  // dj load <set> plays a pasted set file. dj check <set> only shows it.
+  const djLoad = async (line, dry) => {
+    const pasted = line.replace(/^\s*dj\s+(load|check)\s*/i, "").trim();
+    if (!pasted) {
+      print(`paste the set file after dj ${dry ? "check" : "load"}, all on one line. A set file is what dev/SET-FORMAT.md describes`, "dim");
+      return;
+    }
+    await loadSet(pasted, dry);
+  };
+
+  // ---- Set files end ----
 
 
   // A command returns ASK when what followed it reads like a sentence, not
@@ -2602,6 +3060,8 @@
         ["smooth", "reorder the next 30 songs so they run into each other"],
         ["set 60m peak", "build a set: flat, up, down or peak. Add a genre: set 60m peak house"],
         ["dj <brief>", "plan, mix and play a DJ set with real transitions: dj 90 minutes, deep house building to techno. dj plan <brief> only shows it. dj keep <name> keeps it"],
+        ["dj load <set>", "play a set file another app or AI wrote: paste it after dj load. dj check <set> only shows it"],
+        ["export", "save your songs with their tempo, key, tags and release year as a file, to plan sets elsewhere"],
         ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
         ["clear", "empty this window. Esc closes it"],
@@ -3058,7 +3518,8 @@
 
     // dj <brief>: plan a set, pick it, write its transitions and play it. dj keep <name> keeps the playlist.
     async dj(args, line) {
-      const player = S.Platform.PlayerAPI;
+      // dj load and dj check play or show a set file written somewhere else.
+      if (/^(load|check)$/i.test(args[0] ?? "")) return djLoad(line, args[0].toLowerCase() === "check");
       const lists = await loadPlaylists();
       if (args[0]?.toLowerCase() === "keep") {
         const list = lists.find((entry) => entry.own && entry.name === DJ_LIST);
@@ -3119,24 +3580,25 @@
       print(`tempo ${tempos.map((bpm) => "▁▂▃▄▅▆▇█"[Math.min(7, Math.floor(((bpm - low) / (high - low)) * 8))]).join("")}  ${Math.round(tempos[0])} to ${Math.round(tempos.at(-1))} BPM, top ${Math.round(Math.max(...tempos))}`, "chart");
       printSongs(set.songs, null);
       resultsName = plan.name;
-      // Play it: the queue would cut in ahead of the set, and shuffle would undo its order.
-      if (was.queued.length) {
-        await within(player.clearQueue());
-        await settle(() => !queuedNow().length);
-      }
-      if (was.shuffle) await within(player.setShuffle(false));
-      const first = mixed.items[0];
-      await within(player.play({ uri: mixed.list.uri }, { featureIdentifier: "playlist", referrerIdentifier: "other" }, { skipTo: { uri: first.uri, uid: first.uid }, seekTo: 0 }));
-      // A mixed playlist opens partway into its first song, at the point Spotify would blend in. A set starts at the top.
-      if (await settle(() => state().item?.uri === first.uri)) {
-        const place = () => (state().positionAsOfTimestamp ?? 0) + (state().isPaused ? 0 : Date.now() - (state().timestamp ?? Date.now()));
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          await nap(1400);
-          if (place() > 8000) await within(player.seekTo(0));
-        }
-      }
-      undoPlan = { done: "the DJ set stopped and your music is back where it was", run: () => goBack(was) };
+      await playWorkingSet(mixed, was);
       print(`playing it now, mixed by Spotify${was.queued.length ? `. Your ${was.queued.length === 1 ? "queued song was" : `${was.queued.length} queued songs were`} set aside` : ""}. undo puts your music back. dj keep <name> keeps this set`, "ok");
+    },
+
+    // export: your songs with their tempo, key, tags and release year, as a file to give an agent.
+    async export(args) {
+      const { scope } = await readScope(["export", ...args]);
+      print("reading your songs and playlists...", "dim");
+      const { text, counts, noun } = await libraryFile(scope);
+      if (!counts.songs) {
+        print("no songs to export", "dim");
+        return;
+      }
+      const row = print(`${counts.songs} ${noun.replace(/^of (your )?/, "")}: ${counts.tempo} with a tempo and key, ${counts.tags} with tags, ${counts.released} with a release year${counts.features ? `, ${counts.features} with phrases and energy` : ""}. ${(text.length / 1e6).toFixed(1)} MB `, "ok");
+      const save = el("button", "tty-console-link", "save the file");
+      save.type = "button";
+      save.addEventListener("click", () => saveText(text, `spotify-library-${new Date().toISOString().slice(0, 10)}.json`));
+      row.append(save);
+      if (counts.tempo < counts.songs * 0.95) print("some songs are still being indexed. Export again in a minute for a fuller file", "dim");
     },
 
     async save(args, line) {
@@ -3247,6 +3709,8 @@
     "radio <song>   list songs from Spotify's whole catalog that are like a song and are not among the user's songs. Without a song it uses the playing one, and a named song can be any song on Spotify. This is the only way to find new music. radio mix keeps only the ones that mix cleanly.",
     "set <minutes>m <shape> <genre>   list a set built from the user's songs that starts from the playing song. Shape is flat, up, down or peak. The genre is optional.",
     "dj <brief>   plan a DJ set from the brief, pick the songs, write beatmatched transitions between them and play it. The brief is free text: length, genres, moods, how it starts, builds and ends, and it can end with in <playlist>. Use it when the user asks you to DJ, to mix, or for a set with real transitions. Pass the user's own words as the brief.",
+    "export   save the user's songs with tempo, key, tags and release year as a file, for planning sets in another app or AI.",
+    "dj load   play a set file. The user pastes the file after dj load themselves; you never write one. If they ask to play a set file, tell them to paste it after dj load and give no commands.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
     "save <name>   save the last list as a playlist with that name.",
@@ -3320,6 +3784,8 @@
     'Request: DJ for me for an hour, start with deep house and end on techno -> {"say": "Planning and mixing an hour that goes from deep house to techno.", "commands": ["dj an hour, start with deep house and end on techno"]}',
     'Request: mix me a chill sunset set and play it -> {"say": "Planning and mixing a chill sunset set.", "commands": ["dj a chill sunset set"]}',
     'Request: keep that set, call it rooftop -> {"say": "Keeping the set as rooftop.", "commands": ["dj keep rooftop"]}',
+    'Request: export my library so I can plan a set -> {"say": "Getting your songs ready. Click save the file when it appears.", "commands": ["export"]}',
+    'Request: play the set file I made -> {"say": "Paste the set file after dj load, all on one line, and I will mix and play it.", "commands": []}',
     'Request: tidy up my queue -> {"say": "Smoothing the queue.", "commands": ["smooth"]}',
     'Request: what is the weather -> {"say": "I can only find, play, queue and save music here.", "commands": []}',
   ].join("\n");
@@ -3503,7 +3969,7 @@
 
   // One line, typed or from the model. Model lines show with ">" and can't ask the model again.
   const runLine = async (line, fromModel) => {
-    print(`${fromModel ? ">" : "$"} ${/^\s*key\s+(?!remove\b)\S/i.test(line) ? "key ********" : line}`, "echo");
+    print(`${fromModel ? ">" : "$"} ${/^\s*key\s+(?!remove\b)\S/i.test(line) ? "key ********" : line.length > 200 ? `${line.slice(0, 120)}... (${line.length} characters)` : line}`, "echo");
     const args = line.trim().split(/\s+/);
     let name = args.shift().toLowerCase();
     // Answering "what should I call the playlist?" needs no model: the line is the name.
@@ -3535,7 +4001,7 @@
   const runCommand = async (text) => {
     const line = text.trim();
     if (!line || consoleBusy) return;
-    if (!/^key\s+(?!remove\b)\S/i.test(line)) history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
+    if (!/^key\s+(?!remove\b)\S/i.test(line) && line.length <= 2000) history = [line, ...history.filter((old) => old !== line)].slice(0, 40);
     historyAt = -1;
     try {
       localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
@@ -4888,8 +5354,12 @@
   let logDb = null;
   const openLog = () =>
     (logDb ??= new Promise((resolve, reject) => {
-      const req = indexedDB.open("tty-log", 1);
-      req.onupgradeneeded = () => req.result.createObjectStore("plays", { autoIncrement: true });
+      const req = indexedDB.open("tty-log", 2);
+      // Version 2 adds the transitions of loaded sets, one row per pair.
+      req.onupgradeneeded = () => {
+        if (!req.result.objectStoreNames.contains("plays")) req.result.createObjectStore("plays", { autoIncrement: true });
+        if (!req.result.objectStoreNames.contains("sets")) req.result.createObjectStore("sets", { autoIncrement: true });
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     }));
@@ -4897,6 +5367,10 @@
     openLog()
       .then((db) => db.transaction("plays", "readwrite").objectStore("plays").add(row))
       .catch(() => {}); // No storage: the log just doesn't grow.
+  const addSetLog = (row) =>
+    openLog()
+      .then((db) => db.transaction("sets", "readwrite").objectStore("sets").add(row))
+      .catch(() => {});
   const readLog = (limit = 200) =>
     openLog()
       .then(

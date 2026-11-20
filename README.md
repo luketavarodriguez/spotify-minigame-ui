@@ -69,6 +69,8 @@ The console is a real pane, not a pop-up. Drag its title to dock it under or bes
 
 `dj plan …` shows you the plan without playing anything. `dj keep friday` keeps the set as its own playlist, transitions included. `undo` puts your music back.
 
+You can also plan a set somewhere else. `export` saves your songs with their tempo, key, tags and release year as one file. Hand that to any AI (or plan it yourself, if you're that kind of person), have it write a set file in the format in [dev/SET-FORMAT.md](dev/SET-FORMAT.md), and paste it after `dj load`. It mixes and plays the set with the cue points and blend lengths the file asks for, snapped to Spotify's beat grid. The set can use any song on Spotify, not only yours. `dj check` shows it first without playing anything.
+
 (This one needs Spotify Premium, since it runs on Spotify's Mix feature.)
 
 ### Two looks
@@ -192,6 +194,8 @@ You don't need to memorize any of this (that's the point of plain words), but ev
 | `radio` | New songs like this one from all of Spotify. `radio mix` keeps the ones that blend |
 | `set 60m peak` | Build a set. Shapes: flat, up, down, peak. Add a genre or a playlist |
 | `dj <brief>` | Plan, mix and play a DJ set with real transitions. `dj plan <brief>` only shows it, `dj keep <name>` keeps it |
+| `dj load <set>` | Play a set file another app or AI wrote. `dj check <set>` only shows it |
+| `export` | Save your songs, with tempo, key and tags, as a file to plan sets elsewhere |
 | `play all` / `play 3` | Play the last list, or one song from it |
 | `add 1 3 5` | Queue songs from the last list. Clicking a row does the same |
 | `undo` | Take back the last play, add or smooth. Your song, your place in it and your queue come back |
@@ -217,6 +221,7 @@ It's not a magic button. Honestly, a few things will trip you up:
 - **Some tempos read double.** A song at 87 BPM might say 174. The mixing logic treats those as the same tempo, so it still works.
 - **The model makes mistakes.** A small local model will sometimes pick the wrong command. It can only run the commands in the table above, so the worst case is the wrong songs… and `undo` fixes that.
 - **It doesn't know your favorites.** There's no play history beyond the current month and no lyrics search. Ask for "my favorite song from 2018" and it will tell you it can't know, then play something you added in 2018.
+- **A set file is only as good as whoever wrote it.** It can't hear the songs either. If it names a song by the wrong id, the console warns you but still plays whatever that id is. Cue points that don't fit the songs fall back to Spotify's own mix, and the console tells you which.
 - **Songs without beat data** (podcasts, local files, a few tracks) play the games without beat sync.
 
 ## Under the hood

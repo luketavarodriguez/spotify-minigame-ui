@@ -42,6 +42,8 @@
       "say": "play the third one",
       "list": "20 songs (deep house): 1. Stay by FISHER; 2. Blue Berries by Chris Stussy; 3. Losing It by FISHER; ...",
       "expect": ["^play 3$"]
-    }
+    },
+    { "say": "export my library to a file", "expect": ["^export$"] },
+    { "say": "play the set file I made", "expect": [] }
   ]
 }

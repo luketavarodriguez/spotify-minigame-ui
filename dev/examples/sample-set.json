@@ -1,0 +1,104 @@
+{
+  "format": "spotify-mod-set",
+  "version": 1,
+  "setId": "2026-11-19-sample-1",
+  "name": "Validator sample",
+  "brief": "test",
+  "dj": "Marlowe",
+  "created": "2026-11-19T16:30:00-08:00",
+  "exportId": "library-sample",
+  "featuresVersion": "features 2026-11-19",
+  "songs": [
+    {
+      "uri": "spotify:track:01WFjqzUwrD4nfSQsHMVNm",
+      "name": "Ma Tnsani (Yalla Habibi)",
+      "artists": "Vanco, AYA",
+      "bpm": 120,
+      "seconds": 220.0,
+      "reason": "test"
+    },
+    {
+      "uri": "spotify:track:0339d9dCac6LbaHkF9gFIA",
+      "name": "Life Is Like A Circle",
+      "artists": "Derrick Carter, Chris Nazuka",
+      "bpm": 118.8,
+      "seconds": 392.0,
+      "reason": "test"
+    },
+    {
+      "uri": "spotify:track:06iR09uUfFS3kVEAJHJyeB",
+      "name": "Rose",
+      "artists": "Peggy Gou",
+      "bpm": 125,
+      "seconds": 465.0,
+      "reason": "test"
+    },
+    {
+      "uri": "spotify:track:07DuoTCTocHk7y3d8MImks",
+      "name": "Moves",
+      "artists": "Cody Currie, Eliza Rose",
+      "bpm": 121,
+      "seconds": 224.0,
+      "reason": "test"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "spotify:track:01WFjqzUwrD4nfSQsHMVNm",
+      "to": "spotify:track:0339d9dCac6LbaHkF9gFIA",
+      "arm": "custom",
+      "intent": {
+        "type": "blend",
+        "bars": 8,
+        "leaveA": {
+          "kind": "phrase",
+          "at": 194.51
+        },
+        "landB": {
+          "kind": "phrase",
+          "at": 35.347
+        },
+        "tolerance": 0.5
+      },
+      "note": "phrase-aligned"
+    },
+    {
+      "from": "spotify:track:0339d9dCac6LbaHkF9gFIA",
+      "to": "spotify:track:06iR09uUfFS3kVEAJHJyeB",
+      "arm": "custom",
+      "intent": {
+        "type": "drop-entry",
+        "bars": 8,
+        "leaveA": {
+          "kind": "phrase",
+          "at": 338.588
+        },
+        "landB": {
+          "kind": "drop",
+          "at": 230.374
+        },
+        "tolerance": 0.5
+      },
+      "note": "phrase-aligned"
+    },
+    {
+      "from": "spotify:track:06iR09uUfFS3kVEAJHJyeB",
+      "to": "spotify:track:07DuoTCTocHk7y3d8MImks",
+      "arm": "custom",
+      "intent": {
+        "type": "cut",
+        "leaveA": {
+          "kind": "phrase",
+          "at": 436.777
+        },
+        "landB": {
+          "kind": "phrase",
+          "at": 31.774
+        },
+        "tolerance": 0.5
+      },
+      "note": "phrase-aligned"
+    }
+  ],
+  "notes": "sample built from features summaries"
+}

@@ -13,6 +13,7 @@ Everything in `dev/` needs Node 22 or newer and no packages.
 | `cdp.mjs` | Talks to a running Spotify over its inspection port: `status`, `reload`, `run`, `snap`, `eval`, `file`, `shot`, `clip`, `perf`. Run it with no arguments for the list. |
 | `page-helpers.js` | Loaded into the page by `cdp.mjs` as `__tty`: `run(line)`, `snap()`, `wait(ms)`, `look(value)`, `open()`, `close()`. |
 | `model-eval.mjs` | Sends the requests in `model-cases.json` to Ollama with the console's real instructions and checks the commands. Spotify is not involved. |
+| `validate-set.mjs` | Checks a set file for `dj load` with the theme's own `checkSet` (read out of `theme.js`). `--library <export>` adds length and tempo checks, `--strict` fails on warnings. Format in `SET-FORMAT.md`, examples in `examples/`. |
 | `model-cases.json` | The requests, a sample tag list, and the commands each request should produce. |
 
 Inspection mode is a launch flag, so it takes a restart of Spotify:
@@ -174,6 +175,8 @@ These grades know tempo and key only. Two songs can grade clean and still clash 
 
 Planning takes about 9 seconds on qwen3:8b. A whole run takes 11 to 19.
 
+**Set files** (`export`, `dj load`, `dj check`). An outside agent plans the set. `export` writes the library as one file, one song per line (save dialog from a click, clipboard if that fails). The set file (`SET-FORMAT.md`) gives each pair an arm (`custom`, `auto` for Spotify's own, `today` for `planBlend`), an `intent` (type, bars, where A should be gone, where B should be by then, tolerance) and optionally a `resolved` transition in exact ms. `dj load` copies Spotify's own transition for each pair and changes only the points, length and preset: intent points move to the nearest bar of Spotify's grid, too-long blends are shortened keeping their end, and anything that doesn't fit (outside the song, under 60 s after the previous blend, a blend on a pair Spotify won't beatmatch) falls back to Spotify's own with the reason printed. Every write is read back. One row per pair goes to the `sets` store of the `tty-log` IndexedDB (version 2), so skips in `plays` can be joined to the transition before them. `dj` and `dj load` share `playWorkingSet`.
+
 ### How transitions work
 
 `PlaylistMixingAPI`, on playlists the user owns:
@@ -186,6 +189,8 @@ Planning takes about 9 seconds on qwen3:8b. A whole run takes 11 to 19.
 **Measured.** On one pair, Spotify suggested leaving song A at 146.3 s and entering song B at 2.1 s over 8 bars. A custom transition was written: leave at 116.3 s, enter at 32.1 s, 16 bars. The player switched to B with A at about 116.5 s and B at 32.2 s. So the mix-out and mix-in points are honored. By ear it sounded beatmatched.
 
 **The rule in `planBlend`.** Spotify can hear the songs and this code can't, so its suggestion is the starting point. The theme only changes the length, by whole bars, moving the mix-out point earlier or later and leaving the mix-in point alone. It halves or doubles at most. A suggestion of 2 bars or less is left as is, since Spotify had a reason to cut fast. Rough pairs get 4 bars.
+
+**How Spotify picks its own (measured, 221 pairs from four house playlists, 2026-11-19).** Every candidate point sits on a per-song bar grid in whole bars. Its bar length matches the audio analysis within 1%, but its downbeat lands on an analysis bar line only about 21% of the time (on an analysis beat 60 to 67%), so snap to Spotify's grid, not the analysis bars. It does no phrase or drop alignment: the blend ends near B's first drop in 6% of pairs. Lengths are only 2, 4, 8 or 16 bars, or 0 when not beatmatched (52 of 221; those are 2.5 or 5 s fades at the very end of A). `speedA` is always 1 and `speedB` stretches B to A's tempo, never past 10%. `setTransitionForTrack` validates nothing, and a custom transition is replaced by Spotify's own on read-back if a song is swapped for another version. 23 presets, ids 0 to 22; types 1 fade, 2 cut, 3 and 4 the beatmatched versions; 11 to 15 cut at the middle of the overlap.
 
 **Not verified.** Whether the blend length and the volume, EQ or filter curves in `preset` are honored. That needs listening, or a way to observe the audio.
 

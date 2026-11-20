@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "spotify-mod-set-v1",
+  "title": "Spotify mod set file, version 1",
+  "description": "Songs in order and a transition per pair, for dj load. See SET-FORMAT.md. Times in intent are seconds; times in resolved are milliseconds, as Spotify stores them. Timing rules that need song lengths and tempos are checked by validate-set.mjs, not by this schema.",
+  "type": "object",
+  "required": ["format", "version", "setId", "name", "songs"],
+  "properties": {
+    "format": { "const": "spotify-mod-set" },
+    "version": { "const": 1 },
+    "setId": { "type": "string", "minLength": 1, "pattern": "\\S", "description": "Unique per set. Logged with every transition so the listening log can join to it." },
+    "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "brief": { "type": "string" },
+    "gig": { "type": "string" },
+    "dj": { "type": "string", "description": "The persona that made the set." },
+    "created": { "type": "string", "format": "date-time" },
+    "exportId": { "type": "string", "description": "The library export the set was planned from." },
+    "featuresVersion": { "type": "string", "description": "Which feature summaries the planner used." },
+    "scorer": { "description": "The scorer's output for this set, as the scorer writes it. Not read by the loader." },
+    "notes": { "type": "string" },
+    "songs": { "type": "array", "minItems": 2, "maxItems": 300, "items": { "$ref": "#/$defs/song" } },
+    "transitions": {
+      "type": "array",
+      "description": "transitions[i] joins songs[i] to songs[i+1]. null keeps Spotify's own.",
+      "maxItems": 299,
+      "items": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/transition" }] }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "uri": { "type": "string", "pattern": "^spotify:track:[A-Za-z0-9]{22}$" },
+    "song": {
+      "type": "object",
+      "required": ["uri", "name"],
+      "properties": {
+        "uri": { "$ref": "#/$defs/uri", "description": "Any song on Spotify, in or out of the library." },
+        "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "artists": { "type": "string" },
+        "reason": { "type": "string" },
+        "bpm": { "type": "number", "exclusiveMinimum": 0 },
+        "seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "alternates": { "type": "array", "items": { "type": "object" }, "description": "Other songs that could take this slot. Not played." }
+      },
+      "additionalProperties": true
+    },
+    "point": {
+      "type": "object",
+      "required": ["at"],
+      "properties": {
+        "kind": { "enum": ["phrase", "intro", "outro", "drop", "breakdown", "time"] },
+        "at": { "type": "number", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "intent": {
+      "type": "object",
+      "required": ["type", "leaveA", "landB"],
+      "properties": {
+        "type": { "enum": ["blend", "drop-entry", "fade", "cut"] },
+        "bars": { "type": "integer", "minimum": 1, "maximum": 64, "description": "Length in bars of song A's tempo. Not used for cut." },
+        "leaveA": { "$ref": "#/$defs/point", "description": "Seconds into song A when the change is complete: A is gone (blend) or cut (cut)." },
+        "landB": { "$ref": "#/$defs/point", "description": "Seconds into song B at that same moment." },
+        "tolerance": { "type": "number", "minimum": 0, "description": "Bars the loader may move each point to sit on Spotify's beat grid. Default 0.5." }
+      },
+      "if": { "properties": { "type": { "const": "cut" } } },
+      "then": {},
+      "else": { "required": ["bars"] },
+      "additionalProperties": false
+    },
+    "resolved": {
+      "type": "object",
+      "required": ["startAMs", "startBMs", "durationMs"],
+      "properties": {
+        "startAMs": { "type": "number", "minimum": 0 },
+        "startBMs": { "type": "number", "minimum": 0 },
+        "durationMs": { "type": "number", "minimum": 0 },
+        "durationBars": { "type": "integer", "minimum": 0 },
+        "presetId": { "type": "integer", "minimum": 1, "maximum": 22 },
+        "source": { "enum": ["candidate", "shifted", "auto"] }
+      },
+      "additionalProperties": false
+    },
+    "transition": {
+      "type": "object",
+      "properties": {
+        "from": { "$ref": "#/$defs/uri" },
+        "to": { "$ref": "#/$defs/uri" },
+        "arm": { "enum": ["custom", "auto", "today"], "default": "custom" },
+        "intent": { "$ref": "#/$defs/intent" },
+        "resolved": { "$ref": "#/$defs/resolved" },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "arm": { "const": "custom" } } },
+      "then": { "anyOf": [{ "required": ["intent"] }, { "required": ["resolved"] }] }
+    }
+  }
+}
