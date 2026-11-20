@@ -174,8 +174,6 @@ That sticks across restarts. `sh ollama-allow.sh remove` undoes it. On other sys
 
 If a key is saved, the console uses it. Without one, it uses Ollama.
 
-One gotcha… Ollama answers one request at a time. If something else on your computer keeps it busy, the console waits in line (and gives up after a minute). `sh ollama-console.sh install` runs a second Ollama that only the console uses. It costs about 6 GB of memory while its model is loaded.
-
 ## Everything you can type
 
 You don't need to memorize any of this (that's the point of plain words), but every command works on its own with no model connected.
