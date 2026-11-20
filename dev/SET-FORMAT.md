@@ -108,8 +108,8 @@ song B      |======= bars =======|.......     landB.at  = where B is at that mom
 ## What the console does
 
 1. Puts the songs in "AI DJ (working set)" with Mix on, as `dj` does.
-2. For each pair, asks Spotify for its own transition and **copies it**. Only `startAMs`, `startBMs`, `durationMs`, `durationBars` and the preset are changed. Everything else (playable ids, speeds, Spotify's own bookkeeping) stays as Spotify set it. Measured by mixprobe: in 49 of 221 pairs the playable id differs from the playlist's.
-3. From `intent`: works out the start from the end and the length, then moves each point to the nearest bar of Spotify's grid for that pair (whole bars of each song), within `tolerance`. Measured by mixprobe: Spotify's grid matches the analysis bar lines in only 8 of 38 pairs, so seconds from the analysis are approximate and Spotify's grid wins.
+2. For each pair, asks Spotify for its own transition and **copies it**. Only `startAMs`, `startBMs`, `durationMs`, `durationBars` and the preset are changed. Everything else (playable ids, speeds, Spotify's own bookkeeping) stays as Spotify set it. Measured: in 49 of 221 pairs the playable id differs from the playlist's.
+3. From `intent`: works out the start from the end and the length, then moves each point to the nearest bar of Spotify's grid for that pair (whole bars of each song), within `tolerance`. Measured: Spotify's grid lands on the analysis bar lines only about 21% of the time (221 pairs), so seconds from the analysis are approximate and Spotify's grid wins.
 4. Shortens a transition longer than Spotify's longest (read from Spotify, 35 s so far) by whole bars, keeping the end.
 5. Keeps Spotify's own for a pair, and says why, when: a point falls before a song starts, the blend runs past A's end, B would be within 10 s of its end, A would start leaving less than 60 s after its own blend in finished, the pair isn't beatmatched and the type is `blend` or `drop-entry`, or a point is further off the grid than `tolerance`.
 6. Reads every written transition back from Spotify. Each pair ends as **written**, **kept auto**, or **failed** (sent but not stored as sent).
@@ -118,7 +118,7 @@ song B      |======= bars =======|.......     landB.at  = where B is at that mom
 
 ## Presets
 
-From mixprobe's `styles_summary.md` (measured from Spotify's style tables):
+Measured from Spotify's style tables:
 
 - 1 is Spotify's usual pick for pairs it doesn't beatmatch.
 - 11 to 15 are hard cuts: both songs at full volume, then a swap at the middle of the overlap. The console uses 11 for `cut`.
