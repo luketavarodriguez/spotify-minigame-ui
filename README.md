@@ -69,7 +69,7 @@ The console is a real pane, not a pop-up. Drag its title to dock it under or bes
 
 `dj plan …` shows you the plan without playing anything. `dj keep friday` keeps the set as its own playlist, transitions included. `undo` puts your music back.
 
-You can also plan a set somewhere else. `export` saves your songs with their tempo, key, tags and release year as one file. Hand that to any AI (or plan it yourself, if you're that kind of person), have it write a set file in the format in [dev/SET-FORMAT.md](dev/SET-FORMAT.md), and paste it after `dj load`. It mixes and plays the set with the cue points and blend lengths the file asks for, snapped to Spotify's beat grid. The set can use any song on Spotify, not only yours. `dj check` shows it first without playing anything.
+You can also plan a set somewhere else. `export` saves your songs with their tempo, key, tags and release year as one file. Hand that to any AI (or plan it yourself, if you're that kind of person), have it write a set file in the format in [dev/SET-FORMAT.md](dev/SET-FORMAT.md), and paste it after `dj load`. It mixes and plays the set with the cue points and blend lengths the file asks for, snapped to Spotify's beat grid. The set can use any song on Spotify, not only yours. `dj check` shows it first without playing anything. `dj audition` plays only the transitions, about 40 seconds each, so you can check an hour of mixing in a few minutes.
 
 (This one needs Spotify Premium, since it runs on Spotify's Mix feature.)
 
@@ -195,6 +195,7 @@ You don't need to memorize any of this (that's the point of plain words), but ev
 | `set 60m peak` | Build a set. Shapes: flat, up, down, peak. Add a genre or a playlist |
 | `dj <brief>` | Plan, mix and play a DJ set with real transitions. `dj plan <brief>` only shows it, `dj keep <name>` keeps it |
 | `dj load <set>` | Play a set file another app or AI wrote. `dj check <set>` only shows it |
+| `dj audition` | Play only the transitions of the set you just loaded |
 | `export` | Save your songs, with tempo, key and tags, as a file to plan sets elsewhere |
 | `play all` / `play 3` | Play the last list, or one song from it |
 | `add 1 3 5` | Queue songs from the last list. Clicking a row does the same |

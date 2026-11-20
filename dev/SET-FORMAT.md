@@ -44,6 +44,7 @@ A set file is one JSON object. An agent (or a person) writes it from an exported
 | `setId` | yes | Unique per set. Logged with every transition, so the listening log can tell which set and which pair a skip came after. |
 | `name` | yes | Shown in the console. `save` and `dj keep` use it. |
 | `brief`, `gig`, `dj`, `notes` | no | Text: the request, where and when, the persona, free notes. |
+| `audition` | no | Transition numbers (1 is song 1 into song 2) for `dj audition` to play, in this order. Default: all of them. For a blind comparison, put the same two songs in the set twice, one pair with `arm: "auto"` and one with your own, and list both here in a shuffled order. The console never says which is which. |
 | `created` | no | ISO 8601 date and time. |
 | `exportId` | no | Copied from the library export the set was planned from. |
 | `featuresVersion` | no | Which feature summaries the planner used. |

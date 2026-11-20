@@ -44,6 +44,7 @@
       "expect": ["^play 3$"]
     },
     { "say": "export my library to a file", "expect": ["^export$"] },
-    { "say": "play the set file I made", "expect": [] }
+    { "say": "play the set file I made", "expect": [] },
+    { "say": "let me hear just the transitions", "expect": ["^dj audition$"] }
   ]
 }

@@ -18,6 +18,7 @@
     "featuresVersion": { "type": "string", "description": "Which feature summaries the planner used." },
     "scorer": { "description": "The scorer's output for this set, as the scorer writes it. Not read by the loader." },
     "notes": { "type": "string" },
+    "audition": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "Transition numbers dj audition plays, in this order. Default: all of them." },
     "songs": { "type": "array", "minItems": 2, "maxItems": 300, "items": { "$ref": "#/$defs/song" } },
     "transitions": {
       "type": "array",

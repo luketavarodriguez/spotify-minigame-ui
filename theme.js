@@ -2692,6 +2692,7 @@
     if (text(data.created) && Number.isNaN(Date.parse(data.created))) warnings.push(`created isn't a date: ${data.created}`);
     const songs = Array.isArray(data.songs) ? data.songs : [];
     if (!Array.isArray(data.songs)) problems.push("songs must be a list");
+    if (data.audition !== undefined && !(Array.isArray(data.audition) && data.audition.every((n) => Number.isInteger(n) && n >= 1 && n < songs.length))) problems.push(`audition must be a list of transition numbers, 1 to ${Math.max(1, songs.length - 1)}`);
     else if (songs.length < 2) problems.push("songs needs at least two songs");
     else if (songs.length > 300) problems.push(`a set holds 300 songs at most (this one has ${songs.length})`);
     const seen = new Map();
@@ -3012,10 +3013,58 @@
     printSongs(mixed.items.map((item) => songs.find((song) => song.uri === item.uri) ?? { uri: item.uri, name: item.name ?? "", artists: "" }), null);
     resultsName = set.name;
     await playWorkingSet(mixed, was);
+    lastSet = { set, mixed, report };
     print(`playing it now, mixed by Spotify${was.queued.length ? `. Your ${was.queued.length === 1 ? "queued song was" : `${was.queued.length} queued songs were`} set aside` : ""}. undo puts your music back. dj keep <name> keeps this set`, "ok");
   };
 
   // dj load <set> plays a pasted set file. dj check <set> only shows it.
+  // dj audition plays only the transitions of the set loaded last: from 15 seconds before
+  // each blend to 8 seconds after it, then the next. An hour's set takes about 8 minutes.
+  // The file's audition list picks the pairs and their order. Nothing says which arm a pair is,
+  // so a set can hold the same two songs twice, once with Spotify's own and once with its own.
+  let lastSet = null;
+  const audition = async () => {
+    const current = lastSet;
+    // Only while the set is still what's playing: after undo, or other music, there's nothing to audition.
+    if (!current || state().context?.uri !== current.mixed.list.uri) {
+      print("audition plays the transitions of a set you just loaded with dj load. Load one first", "dim");
+      return;
+    }
+    const { set, mixed, report } = current;
+    const player = S.Platform.PlayerAPI;
+    const order = set.audition?.length ? set.audition : report.pairs.map((pair) => pair.pairIndex + 1);
+    const pairs = order.map((n) => report.pairs.find((pair) => pair.pairIndex === n - 1)).filter((pair) => pair?.resolved);
+    if (!pairs.length) {
+      print("this set has no transitions to play", "dim");
+      return;
+    }
+    const at = () => (state().positionAsOfTimestamp ?? 0) + (state().isPaused ? 0 : Date.now() - (state().timestamp ?? Date.now()));
+    const away = () => state().context?.uri !== mixed.list.uri || lastSet !== current; // undo, or other music
+    print(`playing ${pairs.length} transitions, about ${Math.max(1, Math.round(pairs.length * 0.7))} min. Note the numbers that sound wrong. undo stops it and puts your music back`, "dim");
+    for (const [n, pair] of pairs.entries()) {
+      const a = mixed.items[pair.row];
+      const b = mixed.items[pair.row + 1];
+      const from = Math.max(0, pair.resolved.startAMs - 15000);
+      print(`transition ${n + 1} of ${pairs.length}`);
+      await within(player.play({ uri: mixed.list.uri }, { featureIdentifier: "playlist", referrerIdentifier: "other" }, { skipTo: { uri: a.uri, uid: a.uid }, seekTo: from }));
+      if (!(await settle(() => state().item?.uid === a.uid))) return print("audition stopped: Spotify didn't go to the song", "dim");
+      // A mixed playlist can open at its own blend-in point, so seek until it's where it should be.
+      for (let tries = 0; tries < 3 && Math.abs(at() - from) > 3000; tries += 1) {
+        await within(player.seekTo(from));
+        await nap(900);
+      }
+      const until = pair.resolved.startBMs + pair.resolved.durationMs + 8000;
+      const started = Date.now();
+      while (Date.now() - started < 120000) {
+        await nap(500);
+        if (away()) return;
+        if (state().item?.uid === b.uid && at() >= until) break;
+      }
+    }
+    if (!away()) await within(player.pause());
+    print("that's all of them. undo puts your music back", "ok");
+  };
+
   const djLoad = async (line, dry) => {
     const pasted = line.replace(/^\s*dj\s+(load|check)\s*/i, "").trim();
     if (!pasted) {
@@ -3061,6 +3110,7 @@
         ["set 60m peak", "build a set: flat, up, down or peak. Add a genre: set 60m peak house"],
         ["dj <brief>", "plan, mix and play a DJ set with real transitions: dj 90 minutes, deep house building to techno. dj plan <brief> only shows it. dj keep <name> keeps it"],
         ["dj load <set>", "play a set file another app or AI wrote: paste it after dj load. dj check <set> only shows it"],
+        ["dj audition", "play only the transitions of the set loaded last, about 40 seconds each"],
         ["export", "save your songs with their tempo, key, tags and release year as a file, to plan sets elsewhere"],
         ["save my list", "save the last list as a playlist"],
         ["now", "this song's tempo and key"],
@@ -3520,6 +3570,7 @@
     async dj(args, line) {
       // dj load and dj check play or show a set file written somewhere else.
       if (/^(load|check)$/i.test(args[0] ?? "")) return djLoad(line, args[0].toLowerCase() === "check");
+      if (/^audition$/i.test(args[0] ?? "")) return audition();
       const lists = await loadPlaylists();
       if (args[0]?.toLowerCase() === "keep") {
         const list = lists.find((entry) => entry.own && entry.name === DJ_LIST);
@@ -3711,6 +3762,7 @@
     "dj <brief>   plan a DJ set from the brief, pick the songs, write beatmatched transitions between them and play it. The brief is free text: length, genres, moods, how it starts, builds and ends, and it can end with in <playlist>. Use it when the user asks you to DJ, to mix, or for a set with real transitions. Pass the user's own words as the brief.",
     "export   save the user's songs with tempo, key, tags and release year as a file, for planning sets in another app or AI.",
     "dj load   play a set file. The user pastes the file after dj load themselves; you never write one. If they ask to play a set file, tell them to paste it after dj load and give no commands.",
+    "dj audition   play only the transitions of the set loaded last, from just before each blend to just after. Use it when the user wants to hear or check the transitions.",
     "play all   start playing the last list now, in place of the songs the user had queued. play <number> plays one song from it.",
     "add <numbers>   add songs from the last list to the queue without interrupting the music, for example: add 1 2 3. Or: add all.",
     "save <name>   save the last list as a playlist with that name.",
